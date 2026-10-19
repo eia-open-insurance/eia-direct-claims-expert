@@ -1,13 +1,13 @@
 # eia-direct-expert
 
-- GitHub organization: `eia-platform`
-- Repository URL: https://github.com/eia-platform/eia-direct-expert
+- GitHub organization: `eia-open-insurance`
+- Repository URL: https://github.com/eia-open-insurance/eia-direct-expert
 - Type: Spring Boot service
 - Deployable: Yes
 - Owner: Direct
 - Runtime: Java 22, Spring Boot, Spring Batch, Quartz
 - Data store: eia_direct (ent, ref, audit schemas)
-- Depends on: eia-contracts, eia-platform-libs
+- Depends on: eia-contracts, eia-open-insurance-libs
 
 ## Purpose
 
@@ -34,3 +34,6 @@ Direct persistence, invariants, read models, batch jobs, Quartz schedules, and o
 
 Writes data; does not decide business outcomes.
 
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
