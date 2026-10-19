@@ -6,7 +6,7 @@
 - Deployable: Yes
 - Owner: Direct Claims
 - Runtime: Java 22, Spring Boot, Spring Batch, Quartz
-- Data store: eia_direct (ent, ref, audit schemas)
+- Data store: eia_direct (claim table)
 - Depends on: eia-contracts, eia-platform/libs
 
 ## Purpose
@@ -20,6 +20,26 @@ Direct Claims persistence, invariants, read models, batch jobs, Quartz schedules
 - Publish and consume contracts through `eia-contracts`.
 - Maintain README, CODEOWNERS, SECURITY, CHANGELOG, tests, and local verification.
 - Contain no business logic in shared libraries or front-end remotes.
+
+## Local run
+
+Prerequisites: JDK 22, PostgreSQL 17, and database `eia_direct` (`postgres`/`postgres` by default).
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
+.\gradlew build
+.\gradlew bootRun
+```
+
+The service listens on **8087**. `src/main/resources/schema.sql` creates the `claim` table,
+sequence, indexes, and the book/date/reserve check constraints on startup.
+
+Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404):
+
+- `GET /internal/v1/claims?tenantId={uuid}&status={status}`
+- `GET /internal/v1/claims/{id}?tenantId={uuid}`
+- `POST /internal/v1/claims`
+- `PATCH /internal/v1/claims/{id}/status`
 
 ## Verification
 
