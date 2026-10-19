@@ -1,17 +1,17 @@
-# eia-direct-expert
+# eia-primary-expert
 
 - GitHub organization: `eia-open-insurance`
-- Repository URL: https://github.com/eia-open-insurance/eia-direct-expert
+- Repository URL: https://github.com/eia-open-insurance/eia-primary-expert
 - Type: Spring Boot service
 - Deployable: Yes
-- Owner: Direct
+- Owner: Primary
 - Runtime: Java 22, Spring Boot, Spring Batch, Quartz
-- Data store: eia_direct (ent, ref, audit schemas)
+- Data store: eia_primary (ent, ref, audit schemas)
 - Depends on: eia-contracts, eia-open-insurance-libs
 
 ## Purpose
 
-Direct persistence, invariants, read models, batch jobs, Quartz schedules, and outbox/inbox. Direct claims: FNOL, coverage, injury, reserves, litigation, settlement, and recovery.
+Primary persistence, invariants, read models, batch jobs, Quartz schedules, and outbox/inbox. Primary claims: FNOL, coverage, injury, reserves, litigation, settlement, and recovery.
 
 ## Responsibilities
 
