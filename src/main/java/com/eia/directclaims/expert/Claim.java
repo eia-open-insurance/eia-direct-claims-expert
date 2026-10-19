@@ -1,5 +1,7 @@
 package com.eia.directclaims.expert;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -23,7 +25,7 @@ public record Claim(
         LocalDate lossDate,
         LocalDate reportDate,
         String causeCode,
-        BigDecimal reserveAmount,
+        @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal reserveAmount,
         String reserveCurrency,
         int version,
         Instant createdAt,
