@@ -2,6 +2,7 @@ package com.eia.directclaims.expert;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -15,15 +16,28 @@ import java.util.UUID;
 @Service
 public class ClaimService {
     private final ClaimRepository repository;
+    private final CoverageRepository coverageRepository;
+    private final ReserveRepository reserveRepository;
+    private final LienRepository lienRepository;
     private final Clock clock;
 
     @Autowired
-    public ClaimService(ClaimRepository repository) {
-        this(repository, Clock.systemUTC());
+    public ClaimService(ClaimRepository repository,
+                        CoverageRepository coverageRepository,
+                        ReserveRepository reserveRepository,
+                        LienRepository lienRepository) {
+        this(repository, coverageRepository, reserveRepository, lienRepository, Clock.systemUTC());
     }
 
-    ClaimService(ClaimRepository repository, Clock clock) {
+    ClaimService(ClaimRepository repository,
+                 CoverageRepository coverageRepository,
+                 ReserveRepository reserveRepository,
+                 LienRepository lienRepository,
+                 Clock clock) {
         this.repository = repository;
+        this.coverageRepository = coverageRepository;
+        this.reserveRepository = reserveRepository;
+        this.lienRepository = lienRepository;
         this.clock = clock;
     }
 
@@ -38,6 +52,7 @@ public class ClaimService {
         return repository.findById(tenantId, id).orElseThrow(() -> new ClaimNotFoundException(id));
     }
 
+    @Transactional
     public Claim create(CreateClaimRequest request) {
         requireDates(request);
         ClaimStatus initial = request.status() == null || request.status().isBlank()
@@ -61,6 +76,20 @@ public class ClaimService {
             throw new ClaimValidationException("reserveCurrency must be a three-letter ISO currency code");
         }
 
+        String claimType = request.claimType() == null || request.claimType().isBlank()
+                ? "BODILY_INJURY"
+                : Vocab.normalize(Vocab.CLAIM_TYPES, request.claimType(), "claimType");
+
+        BigDecimal authority = request.settlementAuthorityAmount() == null
+                ? null
+                : request.settlementAuthorityAmount().setScale(4, RoundingMode.HALF_UP);
+        if (authority != null && authority.signum() < 0) {
+            throw new ClaimValidationException("settlementAuthorityAmount must be greater than or equal to 0");
+        }
+        String authorityCurrency = authority == null
+                ? null
+                : Vocab.currency(request.settlementAuthorityCurrency(), currency);
+
         String causeCode = request.causeCode() == null || request.causeCode().isBlank()
                 ? null
                 : request.causeCode().trim();
@@ -69,9 +98,12 @@ public class ClaimService {
         long sequence = repository.nextClaimSequence();
         String claimNumber = String.format("CLM-%d-%07d", request.reportDate().getYear(), sequence);
 
-        return repository.insert(UuidV7.next(), claimNumber, request.tenantId(), request.policyId(),
-                request.claimantPartyId(), initial, request.lossDate(), request.reportDate(), causeCode,
-                reserve, currency, now);
+        Claim created = repository.insert(UuidV7.next(), claimNumber, request.tenantId(), request.policyId(),
+                request.claimantPartyId(), claimType, initial, request.lossDate(), request.reportDate(),
+                causeCode, reserve, currency, authority, authorityCurrency, now);
+        reserveRepository.seedInitial(request.tenantId(), created.id(), reserve, currency, now);
+        return repository.findById(request.tenantId(), created.id())
+                .orElseThrow(() -> new ClaimNotFoundException(created.id()));
     }
 
     public Claim changeStatus(UUID tenantId, UUID id, String rawStatus, Integer expectedVersion) {
@@ -86,6 +118,9 @@ public class ClaimService {
             throw new ClaimValidationException(
                     "Illegal claim status transition " + currentStatus + " -> " + next);
         }
+        if (next == ClaimStatus.OPEN) {
+            requireCoverageBeforeOpen(tenantId, id);
+        }
 
         int expected = expectedVersion == null ? current.version() : expectedVersion;
         if (expected != current.version()) {
@@ -93,6 +128,45 @@ public class ClaimService {
                     + " does not match current version " + current.version());
         }
         return repository.updateStatus(tenantId, id, next, expected, Instant.now(clock));
+    }
+
+    /**
+     * DIR-03/DIR-11 style closure preconditions: no unresolved lien, no open
+     * reserve, and a legal transition to CLOSED.
+     */
+    @Transactional
+    public Claim close(UUID tenantId, UUID id, Integer expectedVersion) {
+        Claim current = get(tenantId, id);
+        long unresolvedLiens = lienRepository.countUnresolved(tenantId, id);
+        if (unresolvedLiens > 0) {
+            throw new ClaimValidationException("Claim cannot close while " + unresolvedLiens
+                    + " lien(s) are unresolved");
+        }
+        if (reserveRepository.currentTotal(tenantId, id).signum() > 0) {
+            throw new ClaimValidationException("Claim cannot close while an open reserve exists");
+        }
+        int expected = expectedVersion == null ? current.version() : expectedVersion;
+        if (expected != current.version()) {
+            throw new ClaimConflictException("Claim version " + expected
+                    + " does not match current version " + current.version());
+        }
+        ClaimStatus currentStatus = ClaimStatus.from(current.status());
+        if (!currentStatus.canTransitionTo(ClaimStatus.CLOSED)) {
+            throw new ClaimValidationException(
+                    "Claim status " + currentStatus + " cannot move to CLOSED");
+        }
+        return repository.updateStatus(tenantId, id, ClaimStatus.CLOSED, expected, Instant.now(clock));
+    }
+
+    private void requireCoverageBeforeOpen(UUID tenantId, UUID id) {
+        CoverageDecision decision = coverageRepository.findLatestFinal(tenantId, id).orElse(null);
+        if (decision == null) {
+            throw new ClaimValidationException("A final coverage decision is required before OPEN");
+        }
+        if ("DENIED".equals(decision.position())) {
+            throw new ClaimValidationException(
+                    "A claim with a DENIED coverage position cannot move to OPEN");
+        }
     }
 
     private static void requireDates(CreateClaimRequest request) {

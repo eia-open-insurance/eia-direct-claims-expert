@@ -7,12 +7,11 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.time.LocalDate;
 import java.util.List;
-import java.util.UUID;
 
+import static com.eia.directclaims.expert.Fixtures.CLAIM_ID;
+import static com.eia.directclaims.expert.Fixtures.TENANT;
+import static com.eia.directclaims.expert.Fixtures.claim;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -24,10 +23,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(ClaimController.class)
 class ClaimControllerTest {
-    private static final UUID TENANT = UUID.fromString("11111111-1111-7111-8111-111111111111");
-    private static final UUID CLAIM_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d21");
-    private static final UUID POLICY_ID = UUID.fromString("22222222-2222-7222-8222-222222222222");
-    private static final UUID CLAIMANT_ID = UUID.fromString("33333333-3333-7333-8333-333333333333");
     private static final String URL = "/internal/v1/claims";
 
     private static final String VALID_CREATE = """
@@ -38,8 +33,11 @@ class ClaimControllerTest {
               "lossDate": "2026-03-14",
               "reportDate": "2026-03-18",
               "causeCode": "GL",
+              "claimType": "MASS_TORT",
               "reserveAmount": 125000.00,
-              "reserveCurrency": "USD"
+              "reserveCurrency": "USD",
+              "settlementAuthorityAmount": 500000.00,
+              "settlementAuthorityCurrency": "USD"
             }
             """;
 
@@ -58,11 +56,12 @@ class ClaimControllerTest {
                         .header("X-EIA-Book", "DIRECT"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].claimNumber").value("CLM-2026-0000001"))
-                .andExpect(jsonPath("$[0].businessBook").value("DIRECT"));
+                .andExpect(jsonPath("$[0].businessBook").value("DIRECT"))
+                .andExpect(jsonPath("$[0].claimType").value("BODILY_INJURY"));
     }
 
     @Test
-    void reserveAmountIsSerializedAsDecimalString() throws Exception {
+    void moneyFieldsAreSerializedAsDecimalStrings() throws Exception {
         when(service.list(TENANT, null)).thenReturn(List.of(claim("REGISTERED", 0)));
 
         mvc.perform(get(URL)
@@ -70,7 +69,10 @@ class ClaimControllerTest {
                         .header("X-EIA-Book", "DIRECT"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].reserveAmount").isString())
-                .andExpect(jsonPath("$[0].reserveAmount").value("125000.0000"));
+                .andExpect(jsonPath("$[0].reserveAmount").value("125000.0000"))
+                .andExpect(jsonPath("$[0].currentReserveAmount").isString())
+                .andExpect(jsonPath("$[0].currentReserveAmount").value("125000.0000"))
+                .andExpect(jsonPath("$[0].settlementAuthorityAmount").isString());
     }
 
     @Test
@@ -161,22 +163,28 @@ class ClaimControllerTest {
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
     }
 
-    private static Claim claim(String status, int version) {
-        return new Claim(
-                CLAIM_ID,
-                TENANT,
-                "DIRECT",
-                "CLM-2026-0000001",
-                POLICY_ID,
-                CLAIMANT_ID,
-                status,
-                LocalDate.of(2026, 3, 14),
-                LocalDate.of(2026, 3, 18),
-                "GL",
-                new BigDecimal("125000.0000"),
-                "USD",
-                version,
-                Instant.parse("2026-03-18T09:00:00Z"),
-                Instant.parse("2026-03-18T09:00:00Z"));
+    @Test
+    void closesAClaim() throws Exception {
+        when(service.close(TENANT, CLAIM_ID, 5)).thenReturn(claim("CLOSED", 6));
+
+        mvc.perform(post(URL + "/" + CLAIM_ID + "/close")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", "DIRECT")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedVersion\": 5}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CLOSED"));
+    }
+
+    @Test
+    void closeOnTheWrongBookReturns404() throws Exception {
+        mvc.perform(post(URL + "/" + CLAIM_ID + "/close")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", "ASSUMED")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isNotFound());
+
+        verifyNoInteractions(service);
     }
 }

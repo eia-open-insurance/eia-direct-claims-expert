@@ -57,4 +57,13 @@ public class ClaimController {
         BookWall.requireDirect(book);
         return service.changeStatus(tenantId, id, request.status(), request.expectedVersion());
     }
+
+    @PostMapping("/{id}/close")
+    public Claim close(@RequestHeader("X-EIA-Tenant") UUID tenantId,
+                       @RequestHeader(value = "X-EIA-Book", required = false) String book,
+                       @PathVariable UUID id,
+                       @RequestBody(required = false) CloseClaimRequest request) {
+        BookWall.requireDirect(book);
+        return service.close(tenantId, id, request == null ? null : request.expectedVersion());
+    }
 }

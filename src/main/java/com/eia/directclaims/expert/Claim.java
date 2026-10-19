@@ -10,9 +10,10 @@ import java.util.UUID;
 /**
  * Claim aggregate root for the DIRECT book.
  *
- * <p>Core fields mirror SPEC §11.4.4 and the first vertical slice. The
- * {@code businessBook} value is always {@code DIRECT}; the database enforces
- * the same value with a check constraint.</p>
+ * <p>{@code reserveAmount} is the reserve seeded when the claim was registered;
+ * {@code currentReserveAmount} is derived from the current rows of
+ * {@code claim_reserve_history} and is never written back over the seed. Money
+ * is serialized as a decimal string per SPEC §7.6 and §10.3.</p>
  */
 public record Claim(
         UUID id,
@@ -21,12 +22,17 @@ public record Claim(
         String claimNumber,
         UUID policyId,
         UUID claimantPartyId,
+        String claimType,
         String status,
         LocalDate lossDate,
         LocalDate reportDate,
         String causeCode,
         @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal reserveAmount,
         String reserveCurrency,
+        @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal settlementAuthorityAmount,
+        String settlementAuthorityCurrency,
+        boolean litigationFlag,
+        @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal currentReserveAmount,
         int version,
         Instant createdAt,
         Instant updatedAt

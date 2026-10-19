@@ -26,6 +26,12 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
 
-tasks.withType<Test> {
-    useJUnitPlatform()
+val liveTests = providers.gradleProperty("live").isPresent
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform {
+        if (!liveTests) {
+            excludeTags("live")
+        }
+    }
 }

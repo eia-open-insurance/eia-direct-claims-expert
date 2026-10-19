@@ -31,8 +31,10 @@ $env:JAVA_HOME='C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
 .\gradlew bootRun
 ```
 
-The service listens on **8087**. `src/main/resources/schema.sql` creates the `claim` table,
-sequence, indexes, and the book/date/reserve check constraints on startup.
+The service listens on **8087**. `src/main/resources/schema.sql` creates the claim tables,
+sequences, indexes, and the book/date/reserve check constraints on startup. It is idempotent
+and additive: the second slice adds injuries, exposures, reserve history, coverage decisions,
+litigation, settlements, recoveries, and liens.
 
 Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404):
 
@@ -40,15 +42,28 @@ Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404
 - `GET /internal/v1/claims/{id}?tenantId={uuid}`
 - `POST /internal/v1/claims`
 - `PATCH /internal/v1/claims/{id}/status`
+- `POST /internal/v1/claims/{id}/close`
+- `GET|POST /internal/v1/claims/{id}/injuries`, `PATCH /internal/v1/claims/{id}/injuries/{injuryId}`
+- `GET|POST /internal/v1/claims/{id}/exposures`, `PATCH /internal/v1/claims/{id}/exposures/{exposureId}`
+- `GET|POST /internal/v1/claims/{id}/reserves`
+- `GET|POST /internal/v1/claims/{id}/coverage`
+- `GET|POST /internal/v1/claims/{id}/litigation`, `PATCH .../litigation/{litigationId}`
+- `GET|POST /internal/v1/claims/{id}/settlements`, `POST .../settlements/{settlementId}/approve`,
+  `POST .../settlements/{settlementId}/execute`
+- `GET|POST /internal/v1/claims/{id}/recoveries`, `PATCH .../recoveries/{recoveryId}`
+- `GET|POST /internal/v1/claims/{id}/liens`, `PATCH .../liens/{lienId}`
+
+Money is serialized as a decimal string. The claim's current reserve is derived from the
+current rows of `claim_reserve_history`; `reserve_amount` is the initial reserve seeded at
+registration.
 
 ## Verification
 
-- Lint and format
-- Unit tests with 100% business-logic coverage where applicable
-- Contract tests
-- Integration or Playwright tests where applicable
-- Security scan and SBOM
-- Build and publish
+- `.\gradlew build` - unit and controller tests (the `live` tag is excluded).
+- `.\gradlew test -Plive` - the live PostgreSQL smoke (`DirectClaimsLiveSmokeTest`).
+- `pwsh ./scripts/live-smoke-domain.ps1` - full journey through the domain API with both
+  services running; it creates a fresh tenant and exercises injury, coverage, reserve,
+  settlement, and recovery including the negative cases.
 
 ## Notes
 

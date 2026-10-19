@@ -25,6 +25,17 @@ public class ApiExceptionHandler {
         return error(HttpStatus.NOT_FOUND, "NOT_FOUND", ex.getMessage(), request, null);
     }
 
+    @ExceptionHandler(RecordNotFoundException.class)
+    public ResponseEntity<ApiError> recordNotFound(RecordNotFoundException ex, HttpServletRequest request) {
+        return error(HttpStatus.NOT_FOUND, "NOT_FOUND", ex.getMessage(), request, null);
+    }
+
+    @ExceptionHandler(CoverageDecisionNotFoundException.class)
+    public ResponseEntity<ApiError> coverageNotFound(CoverageDecisionNotFoundException ex,
+                                                     HttpServletRequest request) {
+        return error(HttpStatus.NOT_FOUND, "NOT_FOUND", ex.getMessage(), request, null);
+    }
+
     @ExceptionHandler(BookAccessDeniedException.class)
     public ResponseEntity<ApiError> bookDenied(BookAccessDeniedException ex, HttpServletRequest request) {
         log.warn("Rejected non-DIRECT book access on {}", request.getRequestURI());

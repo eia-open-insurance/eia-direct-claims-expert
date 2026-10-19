@@ -12,3 +12,16 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
 - Direct Claims expert slice: `claim` schema for `eia_direct`, create/list/get and status
   transition endpoints under `/internal/v1/claims`, DIRECT book guard, date/reserve
   invariants, UUIDv7 identifiers, optimistic versioning, and JUnit tests.
+- Second Direct Claims slice (SPEC 11.4):
+  - `claim_injury` and `claim_exposure` with claimant, injury type, body part, ICD-10 codes,
+    exposure dates, jurisdiction, severity, version, and add/list/update endpoints.
+  - Append-only `claim_reserve_history` with derived current reserves, components, reason,
+    authority, effective date, and version; negative, reasonless, and stale changes rejected.
+  - Coverage decisions (COVERED/DENIED/DEFENSE_ONLY) with basis, policy provisions,
+    allocation, decision date, reviewer; coverage required before OPEN and injury/exposure
+    facts required before acceptance.
+  - `claim_litigation`, `claim_settlement`, `claim_recovery`, and `claim_lien` with authority
+    limits, release/payment instructions, paid-loss recovery caps, and lien resolution.
+  - `POST /close` with unresolved-lien and open-reserve closure criteria.
+  - `DirectClaimsLiveSmokeTest` against real PostgreSQL and
+    `scripts/live-smoke-domain.ps1` through the domain API.
