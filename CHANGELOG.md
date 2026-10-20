@@ -90,6 +90,23 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
     `claimId`, `claimNumber`, `policyId`, `policyYear`, `layer`, `allocationPct`,
     `allocatedAmount`, `totalPct`, and `totalAmount`; allocation writes bump the claim
     version, and integration tests cover the payload and rollback.
+- Claim allocation policy erosion:
+  - Additive, idempotent `claim_allocation` columns `limit_id UUID`,
+    `erosion_status VARCHAR(16) NOT NULL DEFAULT 'NOT_POSTED'`, `erosion_message TEXT`, and
+    `erosion_posted_at TIMESTAMPTZ` in the PostgreSQL and H2 schemas, with
+    `NOT_POSTED|POSTED|FAILED` and posted-instant consistency checks.
+  - `POST /api/v1/claims/{claimId}/allocations` accepts an optional `limitId`; every
+    allocation starts at `NOT_POSTED`, and the allocation response exposes `limitId`,
+    `erosionStatus`, `erosionMessage`, and `erosionPostedAt`.
+  - `PATCH /api/v1/claims/{claimId}/allocations/{allocationId}/erosion` (also under
+    `/internal/v1`) takes `{status: POSTED|FAILED, message?}`. POSTED stamps the posting
+    instant, FAILED clears it, a same-status repeat is an idempotent 200 no-op, changing an
+    already POSTED allocation is 409, and an absent/out-of-tenant allocation is 404. The
+    posting updates only the allocation row; it does not bump the claim version or write an
+    outbox event.
+  - Service, controller, and H2 integration tests cover create with and without a limit,
+    posted/failed transitions, retry after failure, idempotency, tenant/claim isolation, and
+    the allocation DTO.
 - Claim list claimant filter: `GET /internal/v1/claims` accepts an optional
   `claimantPartyId` UUID alongside `status`. The tenant and DIRECT book scope stay
   mandatory, the two optional filters combine, and results remain newest first by

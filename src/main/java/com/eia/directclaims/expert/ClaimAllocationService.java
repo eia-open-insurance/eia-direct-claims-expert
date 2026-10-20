@@ -11,6 +11,7 @@ import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -23,12 +24,22 @@ import java.util.UUID;
  * parent claim version and appends {@code direct.claim.allocation-created} to
  * the outbox in the same transaction, so a rollback leaves neither the row nor
  * the event behind.</p>
+ *
+ * <p>An allocation may optionally reference the policy limit it erodes and
+ * starts in erosion state {@code NOT_POSTED}. Recording the posting outcome is
+ * a separate command: {@code POSTED} stamps the posting instant and
+ * {@code FAILED} clears it so a failed posting can be retried. A posting is
+ * terminal once {@code POSTED}; repeating the current status is an idempotent
+ * no-op, while changing a posted allocation is a conflict.</p>
  */
 @Service
 public class ClaimAllocationService {
     static final int MIN_POLICY_YEAR = 1900;
     static final int MAX_POLICY_YEAR = 2200;
     static final int MAX_LAYER_LENGTH = 32;
+    static final int MAX_EROSION_MESSAGE_LENGTH = 4000;
+
+    static final String EROSION_POSTED = "POSTED";
 
     private final ClaimAllocationRepository repository;
     private final ClaimRepository claimRepository;
@@ -94,11 +105,60 @@ public class ClaimAllocationService {
         Instant now = Instant.now(clock);
         int claimVersion = claimRepository.bumpVersion(tenantId, claimId, claim.version(), now);
         ClaimAllocation allocation = repository.insert(UuidV7.next(), tenantId, claimId, policyId,
-                policyYear, layer, allocationPct, allocatedAmount, now);
+                request.limitId(), policyYear, layer, allocationPct, allocatedAmount, now);
         ClaimAllocationRepository.Totals totals = repository.totals(tenantId, claimId);
         outbox.insert(OutboxEvent.fromEnvelope(ClaimEvents.allocationCreated(
                 claim, allocation, claimVersion, totals.pct(), totals.amount(), now)));
         return allocation;
+    }
+
+    /**
+     * Records the policy-erosion posting outcome of one allocation. The claim
+     * lookup and the allocation lookup both carry the tenant, so a foreign
+     * tenant or another claim's allocation is 404. {@code POSTED} stamps the
+     * posting instant; {@code FAILED} stores the message with a null instant and
+     * leaves a later successful retry possible. Once posted the state is
+     * terminal: the same status is an idempotent no-op that leaves the stored
+     * message and instant untouched, while a different status is 409.
+     */
+    @Transactional
+    public ClaimAllocation updateErosion(UUID tenantId,
+                                         UUID claimId,
+                                         UUID allocationId,
+                                         AllocationErosionRequest request) {
+        claims.require(tenantId, claimId);
+        ClaimAllocation current = repository.findById(tenantId, claimId, allocationId)
+                .orElseThrow(() -> RecordNotFoundException.of("Claim allocation", allocationId));
+        String status = Vocab.normalize(Vocab.EROSION_STATUSES, request.status(), "status");
+        String message = Vocab.optionalText(request.message(), MAX_EROSION_MESSAGE_LENGTH);
+        if (status.equals(current.erosionStatus())) {
+            return current;
+        }
+        if (EROSION_POSTED.equals(current.erosionStatus())) {
+            throw postedConflict(allocationId, status);
+        }
+
+        Instant postedAt = EROSION_POSTED.equals(status) ? Instant.now(clock) : null;
+        Optional<ClaimAllocation> updated = repository.updateErosion(
+                tenantId, claimId, allocationId, status, message, postedAt);
+        if (updated.isPresent()) {
+            return updated.get();
+        }
+
+        // A concurrent writer posted the allocation between the read and the
+        // update. Re-read: the winner's same status is an idempotent no-op,
+        // anything else is the terminal-posted conflict.
+        ClaimAllocation latest = repository.findById(tenantId, claimId, allocationId)
+                .orElseThrow(() -> RecordNotFoundException.of("Claim allocation", allocationId));
+        if (status.equals(latest.erosionStatus())) {
+            return latest;
+        }
+        throw postedConflict(allocationId, status);
+    }
+
+    private static ClaimConflictException postedConflict(UUID allocationId, String status) {
+        return new ClaimConflictException("Claim allocation " + allocationId
+                + " is already POSTED and cannot be changed to " + status);
     }
 
     private static UUID requireClaimPolicy(Claim claim, UUID policyId) {

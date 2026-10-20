@@ -295,21 +295,49 @@ CREATE INDEX IF NOT EXISTS ix_lien_claim ON claim_lien (tenant_id, claim_id);
 -- ---------------------------------------------------------------------------
 -- Claim allocation: the policy-year and layer split of a claim. The allocation
 -- percentages across one claim may not exceed 1; the allocated amount is a
--- booking figure and is not capped by the current reserve.
+-- booking figure and is not capped by the current reserve. An allocation may
+-- reference the policy limit it erodes, and it carries the policy-erosion
+-- posting state (NOT_POSTED / POSTED / FAILED) so a failed posting can be
+-- retried.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claim_allocation (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL,
     claim_id UUID NOT NULL REFERENCES claim (id) ON DELETE CASCADE,
     policy_id UUID NOT NULL,
+    limit_id UUID,
     policy_year INTEGER NOT NULL,
     layer VARCHAR(32) NOT NULL,
     allocation_pct NUMERIC(9,6) NOT NULL,
     allocated_amount NUMERIC(19,4) NOT NULL,
+    erosion_status VARCHAR(16) NOT NULL DEFAULT 'NOT_POSTED',
+    erosion_message TEXT,
+    erosion_posted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT ck_claim_allocation_pct CHECK (allocation_pct > 0 AND allocation_pct <= 1),
-    CONSTRAINT ck_claim_allocation_amount CHECK (allocated_amount >= 0)
+    CONSTRAINT ck_claim_allocation_amount CHECK (allocated_amount >= 0),
+    CONSTRAINT ck_claim_allocation_erosion_status
+        CHECK (erosion_status IN ('NOT_POSTED', 'POSTED', 'FAILED')),
+    CONSTRAINT ck_claim_allocation_erosion_posted
+        CHECK ((erosion_status = 'POSTED' AND erosion_posted_at IS NOT NULL)
+            OR (erosion_status <> 'POSTED' AND erosion_posted_at IS NULL))
 );
+
+-- Additive migration for databases created by the allocation slice. The limit
+-- reference and the message/posting instant are nullable; the status default
+-- backfills every existing allocation as NOT_POSTED.
+ALTER TABLE claim_allocation ADD COLUMN IF NOT EXISTS limit_id UUID;
+ALTER TABLE claim_allocation ADD COLUMN IF NOT EXISTS erosion_status VARCHAR(16) NOT NULL DEFAULT 'NOT_POSTED';
+ALTER TABLE claim_allocation ADD COLUMN IF NOT EXISTS erosion_message TEXT;
+ALTER TABLE claim_allocation ADD COLUMN IF NOT EXISTS erosion_posted_at TIMESTAMPTZ;
+
+ALTER TABLE claim_allocation DROP CONSTRAINT IF EXISTS ck_claim_allocation_erosion_status;
+ALTER TABLE claim_allocation ADD CONSTRAINT ck_claim_allocation_erosion_status
+    CHECK (erosion_status IN ('NOT_POSTED', 'POSTED', 'FAILED'));
+ALTER TABLE claim_allocation DROP CONSTRAINT IF EXISTS ck_claim_allocation_erosion_posted;
+ALTER TABLE claim_allocation ADD CONSTRAINT ck_claim_allocation_erosion_posted
+    CHECK ((erosion_status = 'POSTED' AND erosion_posted_at IS NOT NULL)
+        OR (erosion_status <> 'POSTED' AND erosion_posted_at IS NULL));
 
 CREATE INDEX IF NOT EXISTS ix_claim_allocation_claim
     ON claim_allocation (tenant_id, claim_id);

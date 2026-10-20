@@ -6,6 +6,8 @@ import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -15,8 +17,8 @@ import java.util.UUID;
 @Repository
 public class ClaimAllocationRepository {
     private static final String COLUMNS = """
-            id, tenant_id, claim_id, policy_id, policy_year, layer, allocation_pct,
-            allocated_amount, created_at
+            id, tenant_id, claim_id, policy_id, limit_id, policy_year, layer, allocation_pct,
+            allocated_amount, erosion_status, erosion_message, erosion_posted_at, created_at
             """;
 
     private static final BigDecimal ZERO_PCT = new BigDecimal("0.000000");
@@ -27,10 +29,14 @@ public class ClaimAllocationRepository {
             rs.getObject("tenant_id", UUID.class),
             rs.getObject("claim_id", UUID.class),
             rs.getObject("policy_id", UUID.class),
+            rs.getObject("limit_id", UUID.class),
             rs.getInt("policy_year"),
             rs.getString("layer"),
             rs.getBigDecimal("allocation_pct"),
             rs.getBigDecimal("allocated_amount"),
+            rs.getString("erosion_status"),
+            rs.getString("erosion_message"),
+            instant(rs, "erosion_posted_at"),
             rs.getTimestamp("created_at").toInstant()
     );
 
@@ -63,20 +69,44 @@ public class ClaimAllocationRepository {
                                   UUID tenantId,
                                   UUID claimId,
                                   UUID policyId,
+                                  UUID limitId,
                                   int policyYear,
                                   String layer,
                                   BigDecimal allocationPct,
                                   BigDecimal allocatedAmount,
                                   Instant now) {
         jdbc.update("""
-                INSERT INTO claim_allocation (id, tenant_id, claim_id, policy_id, policy_year, layer,
-                                              allocation_pct, allocated_amount, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, id, tenantId, claimId, policyId, policyYear, layer, allocationPct,
+                INSERT INTO claim_allocation (id, tenant_id, claim_id, policy_id, limit_id, policy_year,
+                                              layer, allocation_pct, allocated_amount, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, id, tenantId, claimId, policyId, limitId, policyYear, layer, allocationPct,
                 allocatedAmount, Timestamp.from(now));
         return findById(tenantId, claimId, id)
                 .orElseThrow(() -> new IllegalStateException(
                         "Claim allocation " + id + " was not visible after insert"));
+    }
+
+    /**
+     * Records a policy-erosion posting outcome. The {@code POSTED} state is
+     * terminal: the predicate keeps a concurrent or repeated posting from
+     * overwriting an allocation that is already posted. Zero updated rows means
+     * the caller must re-read the row and decide between an idempotent no-op and
+     * a conflict.
+     */
+    public Optional<ClaimAllocation> updateErosion(UUID tenantId,
+                                                   UUID claimId,
+                                                   UUID allocationId,
+                                                   String status,
+                                                   String message,
+                                                   Instant postedAt) {
+        int changed = jdbc.update("""
+                UPDATE claim_allocation
+                   SET erosion_status = ?, erosion_message = ?, erosion_posted_at = ?
+                 WHERE tenant_id = ? AND claim_id = ? AND id = ?
+                   AND erosion_status <> 'POSTED'
+                """, status, message, postedAt == null ? null : Timestamp.from(postedAt),
+                tenantId, claimId, allocationId);
+        return changed == 0 ? Optional.empty() : findById(tenantId, claimId, allocationId);
     }
 
     /**
@@ -110,6 +140,11 @@ public class ClaimAllocationRepository {
 
     static BigDecimal scaleAmount(BigDecimal value) {
         return value == null ? ZERO_AMOUNT : value.setScale(4, RoundingMode.HALF_UP);
+    }
+
+    private static Instant instant(ResultSet rs, String column) throws SQLException {
+        Timestamp value = rs.getTimestamp(column);
+        return value == null ? null : value.toInstant();
     }
 
     public record Totals(BigDecimal pct, BigDecimal amount) {

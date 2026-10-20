@@ -57,6 +57,9 @@ Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404
 - `GET|POST /internal/v1/claims/{id}/liens`, `PATCH .../liens/{lienId}`
 - `GET|POST /internal/v1/claims/{id}/tasks`, `PATCH .../tasks/{taskId}`
 - `GET|POST /internal/v1/claims/{id}/notes`
+- `GET|POST /internal/v1/claims/{claimId}/allocations`,
+  `PATCH /internal/v1/claims/{claimId}/allocations/{allocationId}/erosion`
+  (also under `/api/v1`)
 
 The task and note routes are also exposed on the public prefix
 `/api/v1/claims/{claimId}/tasks` and `/api/v1/claims/{claimId}/notes`. `GET` accepts
@@ -65,13 +68,25 @@ either `?tenantId={uuid}` or `X-EIA-Tenant`; writes take `X-EIA-Tenant`.
 Claim allocations are exposed at `GET|POST /api/v1/claims/{claimId}/allocations`, with the
 `/internal/v1` alias the domain service uses. `GET` returns `{items, totalPct, totalAmount}`
 oldest first and accepts either `?tenantId={uuid}` or `X-EIA-Tenant`; `POST` takes
-`X-EIA-Tenant` and `{policyId, policyYear, layer, allocationPct, allocatedAmount}` and
-returns 201. The policy must be the claim's own policy (400 `POLICY_MISMATCH`), the year is
+`X-EIA-Tenant` and `{policyId, policyYear, layer, allocationPct, allocatedAmount, limitId?}`
+and returns 201. `limitId` is an optional reference to the policy limit the allocation
+erodes. The policy must be the claim's own policy (400 `POLICY_MISMATCH`), the year is
 1900-2200, the layer is at most 32 characters, the percentage is in (0, 1], and the
 percentages across one claim may not sum above 1 (409 `ALLOCATION_EXCEEDS_100`). The
 allocated amount is a booking figure and is not capped by the current reserve. Allocation
 writes bump the claim version and write `direct.claim.allocation-created` in the same
 transaction.
+
+Every allocation carries its policy-erosion posting state: `erosionStatus` (`NOT_POSTED` at
+creation, then `POSTED` or `FAILED`), `erosionMessage`, and `erosionPostedAt`. `PATCH
+/api/v1/claims/{claimId}/allocations/{allocationId}/erosion` (also under `/internal/v1`)
+takes `{ "status": "POSTED" | "FAILED", "message": "..." }`; `POSTED` stamps
+`erosionPostedAt` with the current instant, `FAILED` stores the message with a null instant
+so the posting can be retried. Repeating the current status is an idempotent 200 no-op that
+leaves the stored message and instant untouched, changing an allocation that is already
+`POSTED` is 409 `CONFLICT`, and an absent or out-of-tenant/claim allocation is 404.
+Recording the posting updates only the allocation row; it does not bump the claim version or
+write an outbox event.
 
 Claim assignment uses `PATCH /api/v1/claims/{claimId}/assignment` (or the internal alias)
 with `{ "assignedAdjuster": "adjuster@example.com", "assignedTeam": "CASUALTY",

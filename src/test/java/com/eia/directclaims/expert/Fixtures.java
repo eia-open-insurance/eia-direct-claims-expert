@@ -24,6 +24,7 @@ final class Fixtures {
     static final UUID TASK_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d39");
     static final UUID NOTE_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d3a");
     static final UUID ALLOCATION_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d3b");
+    static final UUID LIMIT_ID = UUID.fromString("66666666-6666-7666-8666-666666666666");
     static final UUID OTHER_POLICY_ID = UUID.fromString("55555555-5555-7555-8555-555555555555");
     static final UUID OTHER_TENANT = UUID.fromString("99999999-9999-7999-8999-999999999999");
     static final LocalDate LOSS_DATE = LocalDate.of(2026, 3, 14);
@@ -121,7 +122,25 @@ final class Fixtures {
     }
 
     static ClaimAllocation allocation(int policyYear, String layer, String pct, String amount) {
-        return new ClaimAllocation(ALLOCATION_ID, TENANT, CLAIM_ID, POLICY_ID, policyYear, layer,
-                new BigDecimal(pct), new BigDecimal(amount), NOW);
+        return new ClaimAllocation(ALLOCATION_ID, TENANT, CLAIM_ID, POLICY_ID, null, policyYear, layer,
+                new BigDecimal(pct), new BigDecimal(amount), "NOT_POSTED", null, null, NOW);
+    }
+
+    static ClaimAllocation allocation(UUID limitId, int policyYear, String layer, String pct,
+                                      String amount) {
+        return new ClaimAllocation(ALLOCATION_ID, TENANT, CLAIM_ID, POLICY_ID, limitId, policyYear,
+                layer, new BigDecimal(pct), new BigDecimal(amount), "NOT_POSTED", null, null, NOW);
+    }
+
+    static ClaimAllocation postedAllocation(String message) {
+        return new ClaimAllocation(ALLOCATION_ID, TENANT, CLAIM_ID, POLICY_ID, LIMIT_ID, 2024,
+                "PRIMARY", new BigDecimal("0.250000"), new BigDecimal("100000.0000"), "POSTED",
+                message, NOW, NOW);
+    }
+
+    static ClaimAllocation failedAllocation(String message) {
+        return new ClaimAllocation(ALLOCATION_ID, TENANT, CLAIM_ID, POLICY_ID, LIMIT_ID, 2024,
+                "PRIMARY", new BigDecimal("0.250000"), new BigDecimal("100000.0000"), "FAILED",
+                message, null, NOW);
     }
 }

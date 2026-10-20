@@ -11,6 +11,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,7 @@ class ClaimAllocationIntegrationTest {
     private static final UUID POLICY_ID = UUID.fromString("22222222-2222-7222-8222-222222222222");
     private static final UUID OTHER_POLICY_ID = UUID.fromString("55555555-5555-7555-8555-555555555555");
     private static final UUID CLAIMANT_ID = UUID.fromString("33333333-3333-7333-8333-333333333333");
+    private static final UUID LIMIT_ID = UUID.fromString("66666666-6666-7666-8666-666666666666");
 
     @Autowired
     private ClaimService claimService;
@@ -221,6 +223,172 @@ class ClaimAllocationIntegrationTest {
         assertThat(count("outbox_event")).isEqualTo(1);
     }
 
+    @Test
+    void persistsTheOptionalLimitAndDefaultsTheErosionState() {
+        Claim claim = createClaim();
+
+        ClaimAllocation withLimit = allocationService.create(TENANT, claim.id(),
+                request(POLICY_ID, 2024, "PRIMARY", "0.25", "1000.00", LIMIT_ID));
+        ClaimAllocation withoutLimit = allocationService.create(TENANT, claim.id(),
+                request(POLICY_ID, 2024, "EXCESS", "0.25", "1000.00"));
+
+        assertThat(withLimit.limitId()).isEqualTo(LIMIT_ID);
+        assertThat(withLimit.erosionStatus()).isEqualTo("NOT_POSTED");
+        assertThat(withLimit.erosionMessage()).isNull();
+        assertThat(withLimit.erosionPostedAt()).isNull();
+        assertThat(withoutLimit.limitId()).isNull();
+        assertThat(withoutLimit.erosionStatus()).isEqualTo("NOT_POSTED");
+
+        ClaimAllocationSummary summary = allocationService.list(TENANT, claim.id());
+        assertThat(summary.items()).extracting(ClaimAllocation::limitId)
+                .containsExactlyInAnyOrder(LIMIT_ID, null);
+        assertThat(summary.items()).extracting(ClaimAllocation::erosionStatus)
+                .containsOnly("NOT_POSTED");
+        assertThat(jdbc.queryForObject(
+                "SELECT erosion_status FROM claim_allocation WHERE id = ?",
+                String.class, withoutLimit.id())).isEqualTo("NOT_POSTED");
+    }
+
+    @Test
+    void postsAnErosionStateAndStampsThePostingInstant() {
+        Claim claim = createClaim();
+        ClaimAllocation allocation = allocationService.create(TENANT, claim.id(),
+                request(POLICY_ID, 2024, "PRIMARY", "0.25", "1000.00", LIMIT_ID));
+        Instant before = Instant.now().minusSeconds(5);
+
+        ClaimAllocation posted = allocationService.updateErosion(TENANT, claim.id(), allocation.id(),
+                new AllocationErosionRequest("POSTED", "limit-erosion-2026-0001"));
+
+        assertThat(posted.erosionStatus()).isEqualTo("POSTED");
+        assertThat(posted.erosionMessage()).isEqualTo("limit-erosion-2026-0001");
+        assertThat(posted.erosionPostedAt()).isAfter(before).isBefore(Instant.now().plusSeconds(5));
+
+        Map<String, Object> row = jdbc.queryForMap("""
+                SELECT erosion_status, erosion_message, erosion_posted_at
+                  FROM claim_allocation WHERE id = ?
+                """, allocation.id());
+        assertThat(row.get("erosion_status")).isEqualTo("POSTED");
+        assertThat(row.get("erosion_message")).isEqualTo("limit-erosion-2026-0001");
+        assertThat(row.get("erosion_posted_at")).isNotNull();
+
+        // Recording the posting is a child-state change: it neither bumps the
+        // claim version nor writes another outbox event.
+        assertThat(claimVersion(claim.id())).isEqualTo(1);
+        assertThat(countEvents(claim.id(), "direct.claim.allocation-created")).isEqualTo(1);
+    }
+
+    @Test
+    void recordsAFailedErosionStateWithoutAPostingInstant() {
+        Claim claim = createClaim();
+        ClaimAllocation allocation = allocationService.create(TENANT, claim.id(),
+                request(POLICY_ID, 2024, "PRIMARY", "0.25", "1000.00", LIMIT_ID));
+
+        ClaimAllocation failed = allocationService.updateErosion(TENANT, claim.id(), allocation.id(),
+                new AllocationErosionRequest("FAILED", "limit service unavailable"));
+
+        assertThat(failed.erosionStatus()).isEqualTo("FAILED");
+        assertThat(failed.erosionMessage()).isEqualTo("limit service unavailable");
+        assertThat(failed.erosionPostedAt()).isNull();
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM claim_allocation
+                 WHERE id = ? AND erosion_posted_at IS NULL
+                """, Integer.class, allocation.id())).isEqualTo(1);
+    }
+
+    @Test
+    void aFailedErosionPostingCanBeRetriedAsPosted() {
+        Claim claim = createClaim();
+        ClaimAllocation allocation = allocationService.create(TENANT, claim.id(),
+                request(POLICY_ID, 2024, "PRIMARY", "0.25", "1000.00", LIMIT_ID));
+
+        allocationService.updateErosion(TENANT, claim.id(), allocation.id(),
+                new AllocationErosionRequest("FAILED", "timeout"));
+        ClaimAllocation posted = allocationService.updateErosion(TENANT, claim.id(), allocation.id(),
+                new AllocationErosionRequest("POSTED", "retry accepted"));
+
+        assertThat(posted.erosionStatus()).isEqualTo("POSTED");
+        assertThat(posted.erosionMessage()).isEqualTo("retry accepted");
+        assertThat(posted.erosionPostedAt()).isNotNull();
+    }
+
+    @Test
+    void repeatingThePostedErosionStatusIsAnIdempotentNoOp() {
+        Claim claim = createClaim();
+        ClaimAllocation allocation = allocationService.create(TENANT, claim.id(),
+                request(POLICY_ID, 2024, "PRIMARY", "0.25", "1000.00", LIMIT_ID));
+
+        ClaimAllocation first = allocationService.updateErosion(TENANT, claim.id(), allocation.id(),
+                new AllocationErosionRequest("POSTED", "first posting"));
+        sleepMillis(5);
+        ClaimAllocation second = allocationService.updateErosion(TENANT, claim.id(), allocation.id(),
+                new AllocationErosionRequest("POSTED", "second posting"));
+
+        assertThat(second.erosionStatus()).isEqualTo("POSTED");
+        assertThat(second.erosionMessage()).isEqualTo("first posting");
+        assertThat(second.erosionPostedAt()).isEqualTo(first.erosionPostedAt());
+    }
+
+    @Test
+    void rejectsChangingAnAllocationThatIsAlreadyPosted() {
+        Claim claim = createClaim();
+        ClaimAllocation allocation = allocationService.create(TENANT, claim.id(),
+                request(POLICY_ID, 2024, "PRIMARY", "0.25", "1000.00", LIMIT_ID));
+        ClaimAllocation posted = allocationService.updateErosion(TENANT, claim.id(), allocation.id(),
+                new AllocationErosionRequest("POSTED", "first posting"));
+
+        assertThatThrownBy(() -> allocationService.updateErosion(TENANT, claim.id(), allocation.id(),
+                new AllocationErosionRequest("FAILED", "too late")))
+                .isInstanceOf(ClaimConflictException.class)
+                .hasMessageContaining("already POSTED");
+
+        ClaimAllocation stored = allocationService.list(TENANT, claim.id()).items().get(0);
+        assertThat(stored.erosionStatus()).isEqualTo("POSTED");
+        assertThat(stored.erosionMessage()).isEqualTo("first posting");
+        assertThat(stored.erosionPostedAt()).isEqualTo(posted.erosionPostedAt());
+    }
+
+    @Test
+    void erosionUpdatesAreHiddenFromAnotherTenant() {
+        Claim claim = createClaim();
+        ClaimAllocation allocation = allocationService.create(TENANT, claim.id(),
+                request(POLICY_ID, 2024, "PRIMARY", "0.25", "1000.00", LIMIT_ID));
+
+        assertThatThrownBy(() -> allocationService.updateErosion(OTHER_TENANT, claim.id(),
+                allocation.id(), new AllocationErosionRequest("POSTED", null)))
+                .isInstanceOf(ClaimNotFoundException.class);
+
+        ClaimAllocation stored = allocationService.list(TENANT, claim.id()).items().get(0);
+        assertThat(stored.erosionStatus()).isEqualTo("NOT_POSTED");
+        assertThat(stored.erosionMessage()).isNull();
+        assertThat(stored.erosionPostedAt()).isNull();
+    }
+
+    @Test
+    void erosionUpdatesAreHiddenFromAnotherClaimInTheSameTenant() {
+        Claim claim = createClaim();
+        Claim otherClaim = createClaim();
+        ClaimAllocation allocation = allocationService.create(TENANT, claim.id(),
+                request(POLICY_ID, 2024, "PRIMARY", "0.25", "1000.00", LIMIT_ID));
+
+        assertThatThrownBy(() -> allocationService.updateErosion(TENANT, otherClaim.id(),
+                allocation.id(), new AllocationErosionRequest("POSTED", null)))
+                .isInstanceOf(RecordNotFoundException.class);
+
+        ClaimAllocation stored = allocationService.list(TENANT, claim.id()).items().get(0);
+        assertThat(stored.erosionStatus()).isEqualTo("NOT_POSTED");
+        assertThat(stored.erosionMessage()).isNull();
+        assertThat(stored.erosionPostedAt()).isNull();
+    }
+
+    @Test
+    void erosionUpdateOfAnUnknownAllocationIs404() {
+        Claim claim = createClaim();
+
+        assertThatThrownBy(() -> allocationService.updateErosion(TENANT, claim.id(),
+                UUID.randomUUID(), new AllocationErosionRequest("POSTED", null)))
+                .isInstanceOf(RecordNotFoundException.class);
+    }
+
     // ------------------------------------------------------------------ helpers
     private Claim createClaim() {
         return claimService.create(new CreateClaimRequest(
@@ -232,8 +400,14 @@ class ClaimAllocationIntegrationTest {
 
     private static CreateClaimAllocationRequest request(UUID policyId, Integer policyYear,
                                                         String layer, String pct, String amount) {
+        return request(policyId, policyYear, layer, pct, amount, null);
+    }
+
+    private static CreateClaimAllocationRequest request(UUID policyId, Integer policyYear,
+                                                        String layer, String pct, String amount,
+                                                        UUID limitId) {
         return new CreateClaimAllocationRequest(policyId, policyYear, layer,
-                new BigDecimal(pct), new BigDecimal(amount));
+                new BigDecimal(pct), new BigDecimal(amount), limitId);
     }
 
     private int claimVersion(UUID claimId) {

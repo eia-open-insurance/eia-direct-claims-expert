@@ -83,6 +83,9 @@ final class Vocab {
     static final Set<String> LIEN_RESOLUTIONS = Set.of("PAID", "NEGOTIATED", "WAIVED", "DEFERRED");
     static final Set<String> TERMINAL_LIEN_STATUSES = Set.of("RESOLVED", "WAIVED", "PAID");
 
+    /** Erosion posting outcomes a client may record; NOT_POSTED is initial-only. */
+    static final Set<String> EROSION_STATUSES = Set.of("POSTED", "FAILED");
+
     static final Set<String> TASK_PRIORITIES = Set.of("LOW", "NORMAL", "HIGH", "URGENT");
     static final Set<String> TASK_STATUSES = Set.of("OPEN", "COMPLETE", "CANCELLED");
     static final Set<String> NOTE_TYPES = Set.of(

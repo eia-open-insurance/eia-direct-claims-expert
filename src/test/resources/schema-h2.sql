@@ -124,14 +124,38 @@ CREATE TABLE IF NOT EXISTS claim_allocation (
     tenant_id UUID NOT NULL,
     claim_id UUID NOT NULL REFERENCES claim (id) ON DELETE CASCADE,
     policy_id UUID NOT NULL,
+    limit_id UUID,
     policy_year INTEGER NOT NULL,
     layer VARCHAR(32) NOT NULL,
     allocation_pct NUMERIC(9, 6) NOT NULL,
     allocated_amount NUMERIC(19, 4) NOT NULL,
+    erosion_status VARCHAR(16) NOT NULL DEFAULT 'NOT_POSTED',
+    erosion_message TEXT,
+    erosion_posted_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     CONSTRAINT ck_claim_allocation_pct CHECK (allocation_pct > 0 AND allocation_pct <= 1),
-    CONSTRAINT ck_claim_allocation_amount CHECK (allocated_amount >= 0)
+    CONSTRAINT ck_claim_allocation_amount CHECK (allocated_amount >= 0),
+    CONSTRAINT ck_claim_allocation_erosion_status
+        CHECK (erosion_status IN ('NOT_POSTED', 'POSTED', 'FAILED')),
+    CONSTRAINT ck_claim_allocation_erosion_posted
+        CHECK ((erosion_status = 'POSTED' AND erosion_posted_at IS NOT NULL)
+            OR (erosion_status <> 'POSTED' AND erosion_posted_at IS NULL))
 );
+
+-- The erosion columns are additive for an existing H2 database; the status
+-- default keeps existing allocations at NOT_POSTED.
+ALTER TABLE claim_allocation ADD COLUMN IF NOT EXISTS limit_id UUID;
+ALTER TABLE claim_allocation ADD COLUMN IF NOT EXISTS erosion_status VARCHAR(16) NOT NULL DEFAULT 'NOT_POSTED';
+ALTER TABLE claim_allocation ADD COLUMN IF NOT EXISTS erosion_message TEXT;
+ALTER TABLE claim_allocation ADD COLUMN IF NOT EXISTS erosion_posted_at TIMESTAMP WITH TIME ZONE;
+
+ALTER TABLE claim_allocation DROP CONSTRAINT IF EXISTS ck_claim_allocation_erosion_status;
+ALTER TABLE claim_allocation ADD CONSTRAINT ck_claim_allocation_erosion_status
+    CHECK (erosion_status IN ('NOT_POSTED', 'POSTED', 'FAILED'));
+ALTER TABLE claim_allocation DROP CONSTRAINT IF EXISTS ck_claim_allocation_erosion_posted;
+ALTER TABLE claim_allocation ADD CONSTRAINT ck_claim_allocation_erosion_posted
+    CHECK ((erosion_status = 'POSTED' AND erosion_posted_at IS NOT NULL)
+        OR (erosion_status <> 'POSTED' AND erosion_posted_at IS NULL));
 
 CREATE INDEX IF NOT EXISTS ix_claim_allocation_claim
     ON claim_allocation (tenant_id, claim_id);
