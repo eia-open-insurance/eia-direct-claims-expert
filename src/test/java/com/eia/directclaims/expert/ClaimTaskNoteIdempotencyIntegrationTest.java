@@ -19,7 +19,14 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -227,6 +234,73 @@ class ClaimTaskNoteIdempotencyIntegrationTest {
         assertThat(countEvents(claim.id(), ClaimEvents.NOTE_ADDED)).isEqualTo(2);
     }
 
+    // -------------------------------------------------------------- concurrency
+    @Test
+    void simultaneousTaskCreatesWithTheSameKeyCreateOneTaskAndReplay() throws Exception {
+        Claim claim = createClaim(TENANT);
+
+        List<MvcResult> results = runTogether(
+                () -> postTask(TENANT, claim.id(), "race-task-key", "Review medical records"),
+                () -> postTask(TENANT, claim.id(), "race-task-key", "Review medical records"));
+
+        assertThat(results.stream().map(result -> result.getResponse().getStatus()).toList())
+                .containsExactlyInAnyOrder(201, 201);
+        assertThat(results.stream()
+                .map(result -> result.getResponse().getHeader("Idempotent-Replay"))
+                .toList()).containsExactlyInAnyOrder("false", "true");
+        assertThat(json(results.get(0))).isEqualTo(json(results.get(1)));
+
+        assertThat(count("claim_task")).isEqualTo(1);
+        assertThat(count("claim_command_idempotency")).isEqualTo(1);
+        assertThat(countEvents(claim.id(), ClaimEvents.TASK_CREATED)).isEqualTo(1);
+        assertThat(claimVersion(claim.id())).isEqualTo(1);
+    }
+
+    @Test
+    void simultaneousTaskCreatesWithDifferentBodiesHaveOneWinnerAndOne409() throws Exception {
+        Claim claim = createClaim(TENANT);
+
+        List<MvcResult> results = runTogether(
+                () -> postTask(TENANT, claim.id(), "race-task-key", "Review medical records"),
+                () -> postTask(TENANT, claim.id(), "race-task-key", "A different task"));
+
+        assertThat(results.stream().map(result -> result.getResponse().getStatus()).toList())
+                .containsExactlyInAnyOrder(201, 409);
+        MvcResult conflict = results.stream()
+                .filter(result -> result.getResponse().getStatus() == 409)
+                .findFirst()
+                .orElseThrow();
+        JsonNode problem = json(conflict);
+        assertThat(problem.get("code").asText()).isEqualTo("EIA-DIR-4091");
+        assertThat(problem.get("category").asText()).isEqualTo("IDEMPOTENCY_KEY_REUSED");
+
+        assertThat(count("claim_task")).isEqualTo(1);
+        assertThat(count("claim_command_idempotency")).isEqualTo(1);
+        assertThat(countEvents(claim.id(), ClaimEvents.TASK_CREATED)).isEqualTo(1);
+        assertThat(claimVersion(claim.id())).isEqualTo(1);
+    }
+
+    @Test
+    void simultaneousNoteAddsWithTheSameKeyCreateOneNoteAndReplay() throws Exception {
+        Claim claim = createClaim(TENANT);
+
+        List<MvcResult> results = runTogether(
+                () -> postNote(TENANT, claim.id(), "race-note-key", "Called the claimant"),
+                () -> postNote(TENANT, claim.id(), "race-note-key", "Called the claimant"));
+
+        assertThat(results.stream().map(result -> result.getResponse().getStatus()).toList())
+                .containsExactlyInAnyOrder(201, 201);
+        assertThat(results.stream()
+                .map(result -> result.getResponse().getHeader("Idempotent-Replay"))
+                .toList()).containsExactlyInAnyOrder("false", "true");
+        assertThat(json(results.get(0))).isEqualTo(json(results.get(1)));
+
+        assertThat(count("claim_note")).isEqualTo(1);
+        assertThat(count("claim_command_idempotency")).isEqualTo(1);
+        assertThat(countEvents(claim.id(), ClaimEvents.NOTE_ADDED)).isEqualTo(1);
+        assertThat(claimVersion(claim.id())).isEqualTo(1);
+    }
+
     // ---------------------------------------------------------------- rollback
     @Test
     void taskRollbackLeavesNoTaskNoEventAndNoStoredKey() {
@@ -272,6 +346,31 @@ class ClaimTaskNoteIdempotencyIntegrationTest {
     }
 
     // ------------------------------------------------------------------ helpers
+    /**
+     * Runs two HTTP requests at the same instant so both reach the same-key
+     * reservation together; the primary key decides the winner and the loser
+     * must replay or reject instead of surfacing a constraint error.
+     */
+    private static List<MvcResult> runTogether(Callable<MvcResult> first,
+                                               Callable<MvcResult> second) throws Exception {
+        CyclicBarrier start = new CyclicBarrier(2);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<MvcResult> firstResult = pool.submit(() -> {
+                start.await(10, TimeUnit.SECONDS);
+                return first.call();
+            });
+            Future<MvcResult> secondResult = pool.submit(() -> {
+                start.await(10, TimeUnit.SECONDS);
+                return second.call();
+            });
+            return List.of(firstResult.get(30, TimeUnit.SECONDS),
+                    secondResult.get(30, TimeUnit.SECONDS));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     private MvcResult postTask(UUID tenantId, UUID claimId, String idempotencyKey, String title)
             throws Exception {
         MockHttpServletRequestBuilder request = post("/api/v1/claims/{claimId}/tasks", claimId)

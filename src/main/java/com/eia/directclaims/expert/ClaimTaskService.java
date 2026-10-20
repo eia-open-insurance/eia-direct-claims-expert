@@ -25,11 +25,13 @@ import java.util.UUID;
  * is 409 and a command that repeats the current status is a no-op that writes
  * no event.</p>
  *
- * <p>Create accepts an optional {@code Idempotency-Key}. The key and the
- * canonical request hash are stored in the same transaction as the task, so a
- * rollback leaves no key behind. An identical retry returns the original 201
- * body and writes neither a second task nor a second event; a different body
- * under the same key is 409 {@code EIA-DIR-4091}.</p>
+ * <p>Create accepts an optional {@code Idempotency-Key}. The key is reserved
+ * atomically in the same transaction as the task and its event, so a rollback
+ * leaves no key behind and a simultaneous same-key command loses the
+ * reservation instead of raising a database constraint error. The loser reads
+ * the winner's committed row: an identical canonical request replays the
+ * original 201 body without writing a second task or event, while a different
+ * body is 409 {@code EIA-DIR-4091}.</p>
  */
 @Service
 public class ClaimTaskService {
@@ -86,11 +88,17 @@ public class ClaimTaskService {
                                                 String rawIdempotencyKey) {
         String idempotencyKey = IdempotencyKeys.normalize(rawIdempotencyKey);
         String requestHash = IdempotencyKeys.taskHash(claimId, request);
+        Instant now = Instant.now(clock);
         if (idempotencyKey != null) {
             Optional<ClaimCommandIdempotency> existing = idempotency.find(
                     tenantId, idempotencyKey, ClaimCommandIdempotencyRepository.TASK_CREATE);
             if (existing.isPresent()) {
                 return replay(existing.get(), requestHash);
+            }
+            if (!idempotency.reserve(tenantId, idempotencyKey,
+                    ClaimCommandIdempotencyRepository.TASK_CREATE, requestHash, now)) {
+                return replay(winner(tenantId, idempotencyKey,
+                        ClaimCommandIdempotencyRepository.TASK_CREATE), requestHash);
             }
         }
 
@@ -101,7 +109,6 @@ public class ClaimTaskService {
         String priority = Vocab.normalize(Vocab.TASK_PRIORITIES, request.priority(), "priority");
         String assignedTo = Vocab.optionalText(request.assignedTo(), 120);
 
-        Instant now = Instant.now(clock);
         String taskNumber = String.format("TSK-%d-%07d", LocalDate.now(clock).getYear(),
                 repository.nextTaskSequence());
         ClaimTask task = repository.insert(UuidV7.next(), tenantId, claimId, taskNumber, title,
@@ -111,8 +118,8 @@ public class ClaimTaskService {
 
         String body = json(task);
         if (idempotencyKey != null) {
-            idempotency.insert(tenantId, idempotencyKey,
-                    ClaimCommandIdempotencyRepository.TASK_CREATE, requestHash, 201, body, now);
+            idempotency.complete(tenantId, idempotencyKey,
+                    ClaimCommandIdempotencyRepository.TASK_CREATE, 201, body);
         }
         return new ClaimCommandResult<>(task, body, false, idempotencyKey != null);
     }
@@ -154,7 +161,22 @@ public class ClaimTaskService {
             throw new IdempotencyKeyReusedException(
                     "Idempotency-Key was already used with a different request.");
         }
+        if (record.responseBody() == null) {
+            throw new IllegalStateException(
+                    "Idempotency reservation has no stored response to replay");
+        }
         return new ClaimCommandResult<>(null, record.responseBody(), true, true);
+    }
+
+    /**
+     * Reads the committed row of the transaction that won the reservation race.
+     * The conflicting insert waits for that transaction to finish, so the row
+     * is visible here; a missing row is an invariant failure, not a retry.
+     */
+    private ClaimCommandIdempotency winner(UUID tenantId, String idempotencyKey, String commandType) {
+        return idempotency.find(tenantId, idempotencyKey, commandType)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Lost the idempotency reservation but the winner's row is not visible"));
     }
 
     private String json(ClaimTask task) {

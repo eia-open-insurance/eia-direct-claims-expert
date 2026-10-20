@@ -345,21 +345,34 @@ CREATE INDEX IF NOT EXISTS ix_claim_note_created
 -- ---------------------------------------------------------------------------
 -- Idempotency for the task and note create commands. The key is scoped by
 -- tenant and command type, so the same value may be used for one task create
--- and one note create. The row is written in the same transaction as the child
--- record: a rollback leaves no reservation, while a replay returns the stored
--- original 201 response without creating a second row or outbox event.
+-- and one note create. A command first reserves the key atomically
+-- (INSERT ... ON CONFLICT DO NOTHING) and then stores the original 201 status
+-- and body once the child row and its event are written; response_status and
+-- response_body stay NULL for the short reservation window. The reservation,
+-- the child record, and the outbox event share one transaction: a rollback
+-- leaves no reservation, a replay returns the stored body without creating a
+-- second row or event, and a simultaneous same-key command replays the winner
+-- instead of failing on the primary key.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS claim_command_idempotency (
     tenant_id UUID NOT NULL,
     idempotency_key VARCHAR(64) NOT NULL,
     command_type VARCHAR(32) NOT NULL,
     request_hash CHAR(64) NOT NULL,
-    response_status INTEGER NOT NULL,
-    response_body JSONB NOT NULL,
+    response_status INTEGER,
+    response_body JSONB,
     created_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT pk_claim_command_idempotency
         PRIMARY KEY (tenant_id, idempotency_key, command_type)
 );
+
+-- Additive migration for databases created by the slice that wrote the
+-- response in the same insert. The reservation is completed in place, so the
+-- two response columns must accept NULL until the command succeeds.
+ALTER TABLE claim_command_idempotency
+    ALTER COLUMN response_status DROP NOT NULL;
+ALTER TABLE claim_command_idempotency
+    ALTER COLUMN response_body DROP NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ix_claim_command_idempotency_created
     ON claim_command_idempotency (tenant_id, command_type, created_at DESC);

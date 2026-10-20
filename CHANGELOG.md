@@ -49,23 +49,42 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
     `direct.claim.note-added`; task/note writes bump the claim version so event aggregate
     versions stay monotonic, and rollback tests cover both resources.
   - Optional `Idempotency-Key` on the task and note create routes, scoped by tenant and
-    command type and stored in `claim_command_idempotency`. A same-body retry replays the
-    stored 201 response with `Idempotent-Replay: true` and writes no new row or event; a
-    different body under the same key is 409 `EIA-DIR-4091` / `IDEMPOTENCY_KEY_REUSED`.
+    command type and stored in `claim_command_idempotency`. The key is reserved atomically
+    with `INSERT ... ON CONFLICT DO NOTHING` in the same transaction as the child row and
+    its event; the response is stored on completion, so a same-body retry replays the
+    original 201 response with `Idempotent-Replay: true` and writes no new row or event,
+    a different body under the same key is 409 `EIA-DIR-4091` / `IDEMPOTENCY_KEY_REUSED`,
+    and a simultaneous same-key command replays the winner instead of raising a database
+    constraint error.
 - Claim assignment:
   - Additive, idempotent `claim` columns `assigned_adjuster VARCHAR(128)`,
     `assigned_team VARCHAR(64)`, `assigned_at TIMESTAMPTZ`, and `assigned_by VARCHAR(128)`
     in the PostgreSQL and H2 schemas.
   - `PATCH /api/v1/claims/{claimId}/assignment` and the `/internal/v1` alias accept
     `{assignedAdjuster, assignedTeam, expectedVersion}`. Adjuster is required (1-128),
-    team is optional (at most 64), and the claim version is the optimistic token.
+    team is optional (at most 64), and the claim version is the optimistic token; a
+    negative `expectedVersion` is 400 `VALIDATION_ERROR`.
   - Assignment and reassignment bump the claim version; a stale version is 409, unknown or
     out-of-tenant/non-DIRECT claims are 404, and repeating the same assignment at the
     current version is a 200 no-op with no event.
   - Write `direct.claim.assigned` to the outbox in the same transaction with `claimId`,
     `claimNumber`, `assignedAdjuster`, `assignedTeam`, `assignedAt`, `assignedBy`, and
-    `version`. `assignedBy` comes from the canonical `X-EIA-User` header (legacy
-    `X-EIA-Actor` also accepted), defaulting to `assignedAdjuster`.
+    `version`. `assignedBy` comes from the canonical `X-EIA-Actor` header and defaults to
+    `assignedAdjuster`; the former `X-EIA-User` alias is no longer accepted.
   - Claim list/get projections expose `assignedAdjuster`, `assignedTeam`, `assignedAt`, and
     `assignedBy`; controller and H2 integration tests cover assign/reassign, stale version,
     no-op, validation, tenant/book isolation, event payload, and rollback.
+
+### Fixed
+
+- Task and note `Idempotency-Key` reservation is atomic. The key row is inserted with
+  `INSERT ... ON CONFLICT DO NOTHING` before the command executes, so two simultaneous
+  same-key requests do not return a raw database constraint error. The losing reservation
+  reads the winner's committed row and replays an identical canonical body; a different
+  body is 409 `EIA-DIR-4091`. `response_status`/`response_body` are nullable during the
+  reservation window, with an idempotent PostgreSQL `DROP NOT NULL` migration and a
+  two-thread H2 concurrency test.
+- Claim assignment rejects a negative `expectedVersion` with 400 `VALIDATION_ERROR`
+  instead of treating it as a stale-version 409, in both bean validation and the service.
+- Claim assignment accepts only the canonical `X-EIA-Actor` header; the `X-EIA-User` alias
+  was removed and the controller test now asserts that it is ignored.

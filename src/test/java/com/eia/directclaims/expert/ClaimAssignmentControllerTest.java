@@ -39,14 +39,14 @@ class ClaimAssignmentControllerTest {
     private ClaimService service;
 
     @Test
-    void assignsThroughThePublicRouteAndPassesTheActingUser() throws Exception {
+    void assignsThroughThePublicRouteAndPassesTheActor() throws Exception {
         when(service.assign(eq(TENANT), eq(CLAIM_ID), any(ClaimAssignmentRequest.class),
                 eq("supervisor@example.com"))).thenReturn(assignedClaim("REGISTERED", 4));
 
         mvc.perform(patch(PUBLIC_URL)
                         .header("X-EIA-Tenant", TENANT)
                         .header("X-EIA-Book", "DIRECT")
-                        .header("X-EIA-User", "supervisor@example.com")
+                        .header("X-EIA-Actor", "supervisor@example.com")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_BODY))
                 .andExpect(status().isOk())
@@ -61,38 +61,38 @@ class ClaimAssignmentControllerTest {
     }
 
     @Test
-    void legacyActorHeaderIsAcceptedAndUserHeaderTakesPrecedence() throws Exception {
+    void theRemovedUserAliasHeaderIsIgnored() throws Exception {
         when(service.assign(eq(TENANT), eq(CLAIM_ID), any(ClaimAssignmentRequest.class),
-                eq("canonical@example.com"))).thenReturn(assignedClaim("REGISTERED", 4));
+                isNull())).thenReturn(assignedClaim("REGISTERED", 4));
 
         mvc.perform(patch(PUBLIC_URL)
                         .header("X-EIA-Tenant", TENANT)
                         .header("X-EIA-Book", "DIRECT")
-                        .header("X-EIA-User", "canonical@example.com")
-                        .header("X-EIA-Actor", "legacy@example.com")
+                        .header("X-EIA-User", "legacy@example.com")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_BODY))
                 .andExpect(status().isOk());
 
         verify(service).assign(eq(TENANT), eq(CLAIM_ID), any(ClaimAssignmentRequest.class),
-                eq("canonical@example.com"));
+                isNull());
     }
 
     @Test
-    void legacyActorHeaderAloneIsAccepted() throws Exception {
+    void actorHeaderAloneIsAccepted() throws Exception {
         when(service.assign(eq(TENANT), eq(CLAIM_ID), any(ClaimAssignmentRequest.class),
-                eq("legacy@example.com"))).thenReturn(assignedClaim("REGISTERED", 4));
+                eq("supervisor@example.com"))).thenReturn(assignedClaim("REGISTERED", 4));
 
         mvc.perform(patch(PUBLIC_URL)
                         .header("X-EIA-Tenant", TENANT)
                         .header("X-EIA-Book", "DIRECT")
-                        .header("X-EIA-Actor", "legacy@example.com")
+                        .header("X-EIA-Actor", "supervisor@example.com")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_BODY))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.assignedBy").value("supervisor@example.com"));
 
         verify(service).assign(eq(TENANT), eq(CLAIM_ID), any(ClaimAssignmentRequest.class),
-                eq("legacy@example.com"));
+                eq("supervisor@example.com"));
     }
 
     @Test
@@ -165,6 +165,22 @@ class ClaimAssignmentControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"assignedAdjuster\":\"adjuster@example.com\"}"))
                 .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.details[0].field").value("expectedVersion"));
+
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void rejectsANegativeExpectedVersionAsValidationNotConflict() throws Exception {
+        mvc.perform(patch(PUBLIC_URL)
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", "DIRECT")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"assignedAdjuster": "adjuster@example.com", "expectedVersion": -1}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
                 .andExpect(jsonPath("$.details[0].field").value("expectedVersion"));
 
         verifyNoInteractions(service);

@@ -17,8 +17,9 @@ import java.util.UUID;
  * service is called.
  *
  * <p>The acting identity is taken from the optional canonical
- * {@code X-EIA-User} header (the legacy {@code X-EIA-Actor} header is also
- * accepted) and defaults to the assigned adjuster when neither is present.</p>
+ * {@code X-EIA-Actor} header and defaults to the assigned adjuster when it is
+ * absent. {@code X-EIA-User} is not part of the Direct Claims contract and is
+ * ignored.</p>
  */
 @RestController
 @RequestMapping({
@@ -35,15 +36,10 @@ public class ClaimAssignmentController {
     @PatchMapping
     public Claim assign(@RequestHeader("X-EIA-Tenant") UUID tenantId,
                         @RequestHeader(value = "X-EIA-Book", required = false) String book,
-                        @RequestHeader(value = "X-EIA-User", required = false) String user,
                         @RequestHeader(value = "X-EIA-Actor", required = false) String actor,
                         @PathVariable UUID claimId,
                         @Valid @RequestBody ClaimAssignmentRequest request) {
         BookWall.requireDirect(book);
-        return service.assign(tenantId, claimId, request, actingUser(user, actor));
-    }
-
-    private static String actingUser(String user, String actor) {
-        return user != null && !user.isBlank() ? user : actor;
+        return service.assign(tenantId, claimId, request, actor);
     }
 }

@@ -165,6 +165,10 @@ public class ClaimService {
         if (request.expectedVersion() == null) {
             throw new ClaimValidationException("expectedVersion is required");
         }
+        if (request.expectedVersion() < 0) {
+            throw new ClaimValidationException(
+                    "expectedVersion must be greater than or equal to 0");
+        }
 
         Claim current = get(tenantId, claimId);
         int expectedVersion = request.expectedVersion();

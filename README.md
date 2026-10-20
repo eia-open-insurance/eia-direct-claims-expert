@@ -65,12 +65,13 @@ either `?tenantId={uuid}` or `X-EIA-Tenant`; writes take `X-EIA-Tenant`.
 Claim assignment uses `PATCH /api/v1/claims/{claimId}/assignment` (or the internal alias)
 with `{ "assignedAdjuster": "adjuster@example.com", "assignedTeam": "CASUALTY",
 "expectedVersion": 3 }`. `assignedAdjuster` is required (1-128 characters), `assignedTeam`
-is optional (at most 64), and `expectedVersion` is required. A real assignment or
+is optional (at most 64), and `expectedVersion` is required and must be zero or greater
+(a negative value is 400 `VALIDATION_ERROR`). A real assignment or
 reassignment replaces the fields, bumps the claim version, and writes
 `direct.claim.assigned`; repeating the same adjuster and team at the current version is a
 200 no-op with no event. A stale version is 409, and an unknown, foreign-tenant, or
-non-DIRECT claim is 404. `assignedBy` is the optional canonical `X-EIA-User` header (the
-legacy `X-EIA-Actor` header is also accepted), falling back to `assignedAdjuster`. Claim
+non-DIRECT claim is 404. `assignedBy` is the optional canonical `X-EIA-Actor` header,
+falling back to `assignedAdjuster`; `X-EIA-User` is not part of this contract. Claim
 list/get responses include `assignedAdjuster`, `assignedTeam`, `assignedAt`, and
 `assignedBy`.
 
@@ -85,11 +86,15 @@ The task and note create routes accept an optional `Idempotency-Key` (trimmed,
 1-64 printable ASCII characters; a UUID is recommended). The key is scoped by
 tenant and command type (`TASK_CREATE` or `NOTE_CREATE`) and stored in
 `claim_command_idempotency` with a canonical request hash and the original 201
-response body. A retry with the same key and the same canonical body returns the
-stored 201 body with `Idempotent-Replay: true` and writes no second row or outbox
-event. Reusing the key with a different body is 409 `application/problem+json`
-with code `EIA-DIR-4091` and category `IDEMPOTENCY_KEY_REUSED`. Without a key the
-create behaviour is unchanged.
+response body. The key is reserved atomically with `INSERT ... ON CONFLICT DO
+NOTHING` in the same transaction as the child row and its outbox event: a
+simultaneous same-key request loses the reservation and reads the winner instead
+of failing on the primary key (a rollback leaves no reservation). A retry with
+the same key and the same canonical body returns the stored 201 body with
+`Idempotent-Replay: true` and writes no second row or outbox event. Reusing the
+key with a different body is 409 `application/problem+json` with code
+`EIA-DIR-4091` and category `IDEMPOTENCY_KEY_REUSED`. Without a key the create
+behaviour is unchanged.
 
 Money is serialized as a decimal string. The claim's current reserve is derived from the
 current rows of `claim_reserve_history`; `reserve_amount` is the initial reserve seeded at

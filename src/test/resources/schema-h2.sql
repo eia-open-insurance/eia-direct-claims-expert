@@ -166,13 +166,15 @@ CREATE INDEX IF NOT EXISTS ix_claim_note_created
 
 -- H2-compatible copy of the command idempotency table. The production column is
 -- jsonb; here it is TEXT so the plain bound parameter can be read back as JSON.
+-- A command reserves the key first and stores the response on completion, so
+-- both response columns are nullable for the reservation window.
 CREATE TABLE IF NOT EXISTS claim_command_idempotency (
     tenant_id UUID NOT NULL,
     idempotency_key VARCHAR(64) NOT NULL,
     command_type VARCHAR(32) NOT NULL,
     request_hash CHAR(64) NOT NULL,
-    response_status INTEGER NOT NULL,
-    response_body TEXT NOT NULL,
+    response_status INTEGER,
+    response_body TEXT,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     CONSTRAINT pk_claim_command_idempotency
         PRIMARY KEY (tenant_id, idempotency_key, command_type)

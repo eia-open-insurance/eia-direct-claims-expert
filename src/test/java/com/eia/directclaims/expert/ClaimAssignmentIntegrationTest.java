@@ -164,6 +164,10 @@ class ClaimAssignmentIntegrationTest {
                 request("adjuster@example.com", null, null), null))
                 .isInstanceOf(ClaimValidationException.class)
                 .hasMessage("expectedVersion is required");
+        assertThatThrownBy(() -> claimService.assign(TENANT, claim.id(),
+                request("adjuster@example.com", "CASUALTY", -1), null))
+                .isInstanceOf(ClaimValidationException.class)
+                .hasMessageContaining("expectedVersion must be greater than or equal to 0");
 
         Claim stored = claimService.get(TENANT, claim.id());
         assertThat(stored.assignedAdjuster()).isNull();

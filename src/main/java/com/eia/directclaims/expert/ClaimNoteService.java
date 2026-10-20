@@ -22,10 +22,13 @@ import java.util.UUID;
  * parent claim version and writes {@code direct.claim.note-added} in the same
  * transaction, so a rollback leaves neither the note nor the event behind.</p>
  *
- * <p>Add accepts an optional {@code Idempotency-Key}. The key and canonical
- * request hash are stored with the note, so a retry replays the original 201
- * body with no second note or event, and a different body under the same key is
- * 409 {@code EIA-DIR-4091}.</p>
+ * <p>Add accepts an optional {@code Idempotency-Key}. The key is reserved
+ * atomically with the note and its event, so a rollback leaves no reservation
+ * and a simultaneous same-key command loses the reservation instead of raising
+ * a database constraint error. The loser reads the winner's committed row: a
+ * retry with the same canonical body replays the original 201 response with no
+ * second note or event, while a different body is 409
+ * {@code EIA-DIR-4091}.</p>
  */
 @Service
 public class ClaimNoteService {
@@ -82,11 +85,17 @@ public class ClaimNoteService {
                                              String rawIdempotencyKey) {
         String idempotencyKey = IdempotencyKeys.normalize(rawIdempotencyKey);
         String requestHash = IdempotencyKeys.noteHash(claimId, request);
+        Instant now = Instant.now(clock);
         if (idempotencyKey != null) {
             Optional<ClaimCommandIdempotency> existing = idempotency.find(
                     tenantId, idempotencyKey, ClaimCommandIdempotencyRepository.NOTE_CREATE);
             if (existing.isPresent()) {
                 return replay(existing.get(), requestHash);
+            }
+            if (!idempotency.reserve(tenantId, idempotencyKey,
+                    ClaimCommandIdempotencyRepository.NOTE_CREATE, requestHash, now)) {
+                return replay(winner(tenantId, idempotencyKey,
+                        ClaimCommandIdempotencyRepository.NOTE_CREATE), requestHash);
             }
         }
 
@@ -95,7 +104,6 @@ public class ClaimNoteService {
         String body = Vocab.requiredText(request.body(), "body", 8000);
         String author = Vocab.requiredText(request.author(), "author", 120);
 
-        Instant now = Instant.now(clock);
         String noteNumber = String.format("NTE-%d-%07d", LocalDate.now(clock).getYear(),
                 repository.nextNoteSequence());
         ClaimNote note = repository.insert(UuidV7.next(), tenantId, claimId, noteNumber, noteType,
@@ -105,8 +113,8 @@ public class ClaimNoteService {
 
         String responseBody = json(note);
         if (idempotencyKey != null) {
-            idempotency.insert(tenantId, idempotencyKey,
-                    ClaimCommandIdempotencyRepository.NOTE_CREATE, requestHash, 201, responseBody, now);
+            idempotency.complete(tenantId, idempotencyKey,
+                    ClaimCommandIdempotencyRepository.NOTE_CREATE, 201, responseBody);
         }
         return new ClaimCommandResult<>(note, responseBody, false, idempotencyKey != null);
     }
@@ -116,7 +124,22 @@ public class ClaimNoteService {
             throw new IdempotencyKeyReusedException(
                     "Idempotency-Key was already used with a different request.");
         }
+        if (record.responseBody() == null) {
+            throw new IllegalStateException(
+                    "Idempotency reservation has no stored response to replay");
+        }
         return new ClaimCommandResult<>(null, record.responseBody(), true, true);
+    }
+
+    /**
+     * Reads the committed row of the transaction that won the reservation race.
+     * The conflicting insert waits for that transaction to finish, so the row
+     * is visible here; a missing row is an invariant failure, not a retry.
+     */
+    private ClaimCommandIdempotency winner(UUID tenantId, String idempotencyKey, String commandType) {
+        return idempotency.find(tenantId, idempotencyKey, commandType)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Lost the idempotency reservation but the winner's row is not visible"));
     }
 
     private String json(ClaimNote note) {
