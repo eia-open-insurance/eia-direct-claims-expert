@@ -12,6 +12,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 
 import static com.eia.directclaims.expert.Fixtures.CLAIM_ID;
@@ -102,6 +103,28 @@ class ClaimServiceTest {
                 eq(new BigDecimal("500000.0000")), eq("USD"), any(Instant.class));
         verify(reserveRepository).seedInitial(eq(Fixtures.TENANT), eq(Fixtures.CLAIM_ID),
                 eq(new BigDecimal("125000.0000")), eq("USD"), any(Instant.class));
+    }
+
+    @Test
+    void listParsesStatusAndForwardsTheClaimantPartyFilter() {
+        when(repository.findAll(Fixtures.TENANT, ClaimStatus.OPEN, Fixtures.CLAIMANT_ID))
+                .thenReturn(List.of(Fixtures.claim("OPEN", 1)));
+
+        List<Claim> claims = service.list(Fixtures.TENANT, "open", Fixtures.CLAIMANT_ID);
+
+        assertEquals(1, claims.size());
+        verify(repository).findAll(Fixtures.TENANT, ClaimStatus.OPEN, Fixtures.CLAIMANT_ID);
+    }
+
+    @Test
+    void listTreatsBlankStatusAsNoFilterAndForwardsNoClaimant() {
+        when(repository.findAll(Fixtures.TENANT, null, null))
+                .thenReturn(List.of(Fixtures.claim("REGISTERED", 0)));
+
+        List<Claim> claims = service.list(Fixtures.TENANT, " ", null);
+
+        assertEquals(1, claims.size());
+        verify(repository).findAll(Fixtures.TENANT, null, null);
     }
 
     @Test

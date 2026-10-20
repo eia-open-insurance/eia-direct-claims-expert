@@ -9,11 +9,13 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 
+import static com.eia.directclaims.expert.Fixtures.CLAIMANT_ID;
 import static com.eia.directclaims.expert.Fixtures.CLAIM_ID;
 import static com.eia.directclaims.expert.Fixtures.TENANT;
 import static com.eia.directclaims.expert.Fixtures.assignedClaim;
 import static com.eia.directclaims.expert.Fixtures.claim;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -50,7 +52,7 @@ class ClaimControllerTest {
 
     @Test
     void listsClaimsForTheDirectBook() throws Exception {
-        when(service.list(TENANT, null)).thenReturn(List.of(claim("REGISTERED", 0)));
+        when(service.list(TENANT, null, null)).thenReturn(List.of(claim("REGISTERED", 0)));
 
         mvc.perform(get(URL)
                         .param("tenantId", TENANT.toString())
@@ -63,7 +65,7 @@ class ClaimControllerTest {
 
     @Test
     void listIncludesClaimAssignmentFields() throws Exception {
-        when(service.list(TENANT, null)).thenReturn(List.of(assignedClaim("REGISTERED", 4)));
+        when(service.list(TENANT, null, null)).thenReturn(List.of(assignedClaim("REGISTERED", 4)));
 
         mvc.perform(get(URL)
                         .param("tenantId", TENANT.toString())
@@ -77,7 +79,7 @@ class ClaimControllerTest {
 
     @Test
     void moneyFieldsAreSerializedAsDecimalStrings() throws Exception {
-        when(service.list(TENANT, null)).thenReturn(List.of(claim("REGISTERED", 0)));
+        when(service.list(TENANT, null, null)).thenReturn(List.of(claim("REGISTERED", 0)));
 
         mvc.perform(get(URL)
                         .param("tenantId", TENANT.toString())
@@ -88,6 +90,60 @@ class ClaimControllerTest {
                 .andExpect(jsonPath("$[0].currentReserveAmount").isString())
                 .andExpect(jsonPath("$[0].currentReserveAmount").value("125000.0000"))
                 .andExpect(jsonPath("$[0].settlementAuthorityAmount").isString());
+    }
+
+    @Test
+    void filtersClaimsByClaimantParty() throws Exception {
+        when(service.list(TENANT, null, CLAIMANT_ID)).thenReturn(List.of(claim("REGISTERED", 0)));
+
+        mvc.perform(get(URL)
+                        .param("tenantId", TENANT.toString())
+                        .param("claimantPartyId", CLAIMANT_ID.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].claimNumber").value("CLM-2026-0000001"))
+                .andExpect(jsonPath("$[0].claimantPartyId").value(CLAIMANT_ID.toString()));
+
+        verify(service).list(TENANT, null, CLAIMANT_ID);
+    }
+
+    @Test
+    void statusAndClaimantPartyFiltersAreCombined() throws Exception {
+        when(service.list(TENANT, "OPEN", CLAIMANT_ID)).thenReturn(List.of(claim("OPEN", 1)));
+
+        mvc.perform(get(URL)
+                        .param("tenantId", TENANT.toString())
+                        .param("status", "OPEN")
+                        .param("claimantPartyId", CLAIMANT_ID.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("OPEN"));
+
+        verify(service).list(TENANT, "OPEN", CLAIMANT_ID);
+    }
+
+    @Test
+    void claimantPartyFilterStaysInsideTheBookWall() throws Exception {
+        mvc.perform(get(URL)
+                        .param("tenantId", TENANT.toString())
+                        .param("claimantPartyId", CLAIMANT_ID.toString())
+                        .header("X-EIA-Book", "ASSUMED"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void malformedClaimantPartyReturns400WithoutTouchingTheService() throws Exception {
+        mvc.perform(get(URL)
+                        .param("tenantId", TENANT.toString())
+                        .param("claimantPartyId", "not-a-uuid")
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_ARGUMENT"));
+
+        verifyNoInteractions(service);
     }
 
     @Test

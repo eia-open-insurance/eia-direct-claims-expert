@@ -40,7 +40,7 @@ assignment fields to `claim`; the allocation slice adds `claim_allocation`.
 
 Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404):
 
-- `GET /internal/v1/claims?tenantId={uuid}&status={status}`
+- `GET /internal/v1/claims?tenantId={uuid}&status={status}&claimantPartyId={uuid}`
 - `GET /internal/v1/claims/{id}?tenantId={uuid}`
 - `POST /internal/v1/claims`
 - `PATCH /internal/v1/claims/{id}/status`

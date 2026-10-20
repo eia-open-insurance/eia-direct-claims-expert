@@ -28,9 +28,10 @@ public class ClaimController {
     @GetMapping
     public List<Claim> list(@RequestParam("tenantId") UUID tenantId,
                             @RequestHeader(value = "X-EIA-Book", required = false) String book,
-                            @RequestParam(value = "status", required = false) String status) {
+                            @RequestParam(value = "status", required = false) String status,
+                            @RequestParam(value = "claimantPartyId", required = false) UUID claimantPartyId) {
         BookWall.requireDirect(book);
-        return service.list(tenantId, status);
+        return service.list(tenantId, status, claimantPartyId);
     }
 
     @GetMapping("/{id}")

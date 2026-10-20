@@ -90,6 +90,11 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
     `claimId`, `claimNumber`, `policyId`, `policyYear`, `layer`, `allocationPct`,
     `allocatedAmount`, `totalPct`, and `totalAmount`; allocation writes bump the claim
     version, and integration tests cover the payload and rollback.
+- Claim list claimant filter: `GET /internal/v1/claims` accepts an optional
+  `claimantPartyId` UUID alongside `status`. The tenant and DIRECT book scope stay
+  mandatory, the two optional filters combine, and results remain newest first by
+  `created_at` with `claim_number` as the tie-break. Repository, service, and controller
+  tests cover the filter, tenant isolation, the unchanged unfiltered list, and ordering.
 
 ### Fixed
 

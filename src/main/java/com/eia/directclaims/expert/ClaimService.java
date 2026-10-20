@@ -50,10 +50,14 @@ public class ClaimService {
     }
 
     public List<Claim> list(UUID tenantId, String statusFilter) {
+        return list(tenantId, statusFilter, null);
+    }
+
+    public List<Claim> list(UUID tenantId, String statusFilter, UUID claimantPartyId) {
         ClaimStatus status = statusFilter == null || statusFilter.isBlank()
                 ? null
                 : ClaimStatus.from(statusFilter);
-        return repository.findAll(tenantId, status);
+        return repository.findAll(tenantId, status, claimantPartyId);
     }
 
     public Claim get(UUID tenantId, UUID id) {

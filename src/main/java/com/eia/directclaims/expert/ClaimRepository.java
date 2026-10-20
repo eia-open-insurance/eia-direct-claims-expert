@@ -10,6 +10,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -66,19 +67,30 @@ public class ClaimRepository {
         return value == null ? 1L : value;
     }
 
-    public List<Claim> findAll(UUID tenantId, ClaimStatus status) {
-        if (status == null) {
-            return jdbc.query("SELECT " + COLUMNS + """
-                      FROM claim c
-                     WHERE c.tenant_id = ? AND c.business_book = 'DIRECT'
-                     ORDER BY c.created_at DESC, c.claim_number DESC
-                    """, MAPPER, tenantId);
+    /**
+     * Lists the tenant's DIRECT claims newest first. The tenant and book scope
+     * are always applied; status and claimant party are independent optional
+     * filters so callers can use either one or both together.
+     */
+    public List<Claim> findAll(UUID tenantId, ClaimStatus status, UUID claimantPartyId) {
+        StringBuilder sql = new StringBuilder("SELECT ")
+                .append(COLUMNS)
+                .append("""
+                          FROM claim c
+                         WHERE c.tenant_id = ? AND c.business_book = 'DIRECT'
+                        """);
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        if (status != null) {
+            sql.append(" AND c.status = ?");
+            args.add(status.name());
         }
-        return jdbc.query("SELECT " + COLUMNS + """
-                      FROM claim c
-                     WHERE c.tenant_id = ? AND c.business_book = 'DIRECT' AND c.status = ?
-                     ORDER BY c.created_at DESC, c.claim_number DESC
-                    """, MAPPER, tenantId, status.name());
+        if (claimantPartyId != null) {
+            sql.append(" AND c.claimant_party_id = ?");
+            args.add(claimantPartyId);
+        }
+        sql.append(" ORDER BY c.created_at DESC, c.claim_number DESC");
+        return jdbc.query(sql.toString(), MAPPER, args.toArray());
     }
 
     public Optional<Claim> findById(UUID tenantId, UUID id) {
