@@ -56,6 +56,7 @@ final class ClaimEvents {
     static final String RESERVE_CHANGED = "direct.claim.reserve-changed";
     static final String SETTLEMENT_AUTHORIZED = "direct.claim.settlement-authorized";
     static final String CLOSED = "direct.claim.closed";
+    static final String ASSIGNED = "direct.claim.assigned";
     static final String TASK_CREATED = "direct.claim.task-created";
     static final String TASK_COMPLETED = "direct.claim.task-completed";
     static final String TASK_UPDATED = "direct.claim.task-updated";
@@ -188,6 +189,20 @@ final class ClaimEvents {
         data.put("closedAt", now);
         data.put("finalReserveAmount", money(after.currentReserveAmount()));
         return envelope(after, CLOSED, after.version() + 1L, now, data);
+    }
+
+    /**
+     * Claim assignment or reassignment. The repository has already incremented
+     * the claim row version, so {@code claim.version()} is the post-write
+     * version and the envelope aggregate version is one greater.
+     */
+    static EventEnvelope assigned(Claim claim, Instant now) {
+        Map<String, Object> data = identity(claim, claim.version());
+        data.put("assignedAdjuster", claim.assignedAdjuster());
+        data.put("assignedTeam", claim.assignedTeam());
+        data.put("assignedAt", claim.assignedAt());
+        data.put("assignedBy", claim.assignedBy());
+        return envelope(claim, ASSIGNED, claim.version() + 1L, now, data);
     }
 
     /**

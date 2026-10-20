@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS claim (
     settlement_authority_amount NUMERIC(19, 4),
     settlement_authority_currency CHAR(3),
     litigation_flag BOOLEAN NOT NULL DEFAULT FALSE,
+    assigned_adjuster VARCHAR(128),
+    assigned_team VARCHAR(64),
+    assigned_at TIMESTAMP WITH TIME ZONE,
+    assigned_by VARCHAR(128),
     reserve_amount NUMERIC(19, 4) NOT NULL DEFAULT 0,
     reserve_currency CHAR(3) NOT NULL DEFAULT 'USD',
     version INTEGER NOT NULL DEFAULT 0,
@@ -35,6 +39,11 @@ CREATE TABLE IF NOT EXISTS claim (
     CONSTRAINT ck_claim_report_date CHECK (report_date >= loss_date),
     CONSTRAINT ck_claim_reserve_non_negative CHECK (reserve_amount >= 0)
 );
+
+ALTER TABLE claim ADD COLUMN IF NOT EXISTS assigned_adjuster VARCHAR(128);
+ALTER TABLE claim ADD COLUMN IF NOT EXISTS assigned_team VARCHAR(64);
+ALTER TABLE claim ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE claim ADD COLUMN IF NOT EXISTS assigned_by VARCHAR(128);
 
 CREATE TABLE IF NOT EXISTS claim_reserve_history (
     id UUID PRIMARY KEY,

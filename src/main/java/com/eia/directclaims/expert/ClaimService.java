@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -142,6 +143,44 @@ public class ClaimService {
         outbox.insert(OutboxEvent.fromEnvelope(next == ClaimStatus.CLOSED
                 ? ClaimEvents.closed(current, after, now)
                 : ClaimEvents.statusUpdated(current, after, now)));
+        return after;
+    }
+
+    /**
+     * Assigns or reassigns a claim. The command is a no-op when the normalized
+     * adjuster and team already match and the caller's version is current; a
+     * stale version is 409 and an unknown or non-DIRECT claim is 404. A real
+     * change bumps the claim version and writes one outbox event in the same
+     * transaction.
+     */
+    @Transactional
+    public Claim assign(UUID tenantId, UUID claimId, ClaimAssignmentRequest request, String rawActor) {
+        String assignedAdjuster = Vocab.requiredText(
+                request.assignedAdjuster(), "assignedAdjuster", 128);
+        String assignedTeam = Vocab.optionalText(request.assignedTeam(), 64);
+        String actor = Vocab.optionalText(rawActor, 128);
+        if (actor == null) {
+            actor = assignedAdjuster;
+        }
+        if (request.expectedVersion() == null) {
+            throw new ClaimValidationException("expectedVersion is required");
+        }
+
+        Claim current = get(tenantId, claimId);
+        int expectedVersion = request.expectedVersion();
+        if (expectedVersion != current.version()) {
+            throw new ClaimConflictException("Claim version " + expectedVersion
+                    + " does not match current version " + current.version());
+        }
+        if (assignedAdjuster.equals(current.assignedAdjuster())
+                && Objects.equals(assignedTeam, current.assignedTeam())) {
+            return current;
+        }
+
+        Instant now = Instant.now(clock);
+        Claim after = repository.assign(tenantId, claimId, assignedAdjuster, assignedTeam,
+                actor, expectedVersion, now);
+        outbox.insert(OutboxEvent.fromEnvelope(ClaimEvents.assigned(after, now)));
         return after;
     }
 

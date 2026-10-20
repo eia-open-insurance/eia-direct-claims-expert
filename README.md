@@ -35,7 +35,8 @@ The service listens on **8087**. `src/main/resources/schema.sql` creates the cla
 sequences, indexes, the book/date/reserve check constraints, and the transactional outbox on
 startup. It is idempotent and additive: the second slice adds injuries, exposures, reserve
 history, coverage decisions, litigation, settlements, recoveries, liens, and `outbox_event`;
-the third slice adds claim tasks and append-only diary notes.
+the third slice adds claim tasks and append-only diary notes; the fourth slice adds claim
+assignment fields to `claim`.
 
 Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404):
 
@@ -44,6 +45,7 @@ Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404
 - `POST /internal/v1/claims`
 - `PATCH /internal/v1/claims/{id}/status`
 - `POST /internal/v1/claims/{id}/close`
+- `PATCH /api/v1/claims/{claimId}/assignment` (also under `/internal/v1`)
 - `GET|POST /internal/v1/claims/{id}/injuries`, `PATCH /internal/v1/claims/{id}/injuries/{injuryId}`
 - `GET|POST /internal/v1/claims/{id}/exposures`, `PATCH /internal/v1/claims/{id}/exposures/{exposureId}`
 - `GET|POST /internal/v1/claims/{id}/reserves`
@@ -59,6 +61,18 @@ Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404
 The task and note routes are also exposed on the public prefix
 `/api/v1/claims/{claimId}/tasks` and `/api/v1/claims/{claimId}/notes`. `GET` accepts
 either `?tenantId={uuid}` or `X-EIA-Tenant`; writes take `X-EIA-Tenant`.
+
+Claim assignment uses `PATCH /api/v1/claims/{claimId}/assignment` (or the internal alias)
+with `{ "assignedAdjuster": "adjuster@example.com", "assignedTeam": "CASUALTY",
+"expectedVersion": 3 }`. `assignedAdjuster` is required (1-128 characters), `assignedTeam`
+is optional (at most 64), and `expectedVersion` is required. A real assignment or
+reassignment replaces the fields, bumps the claim version, and writes
+`direct.claim.assigned`; repeating the same adjuster and team at the current version is a
+200 no-op with no event. A stale version is 409, and an unknown, foreign-tenant, or
+non-DIRECT claim is 404. `assignedBy` is the optional canonical `X-EIA-User` header (the
+legacy `X-EIA-Actor` header is also accepted), falling back to `assignedAdjuster`. Claim
+list/get responses include `assignedAdjuster`, `assignedTeam`, `assignedAt`, and
+`assignedBy`.
 
 Tasks are returned open-first ordered by due date, then cancelled, then completed
 (newest completion first). A task starts at version 1 and `PATCH` takes
@@ -93,6 +107,7 @@ The service publishes the names from `eia-contracts/asyncapi/event-catalog.yaml`
 | `POST /internal/v1/claims` | `direct.claim.registered` |
 | Status change (except CLOSED) | `direct.claim.updated` |
 | Status change to CLOSED or `POST .../close` | `direct.claim.closed` |
+| `PATCH .../assignment` | `direct.claim.assigned` |
 | `POST .../coverage` | `direct.claim.coverage-assessed` |
 | `POST .../reserves` | `direct.claim.reserve-changed` |
 | `POST .../settlements/{id}/approve` | `direct.claim.settlement-authorized` |
@@ -103,15 +118,17 @@ The service publishes the names from `eia-contracts/asyncapi/event-catalog.yaml`
 
 The requested slice names `direct.claim.created`, `direct.claim.coverage-decided`, and
 `direct.claim.settlement-approved` are not in the catalog; the catalog names above are
-published instead. The task and note event names are new in this slice and are not yet in
-`eia-contracts/asyncapi` (the contracts repository is owned separately); they are reported as a
-catalog follow-up. Every payload carries `claimId`, `claimNumber`, `policyId`,
+published instead. The task, note, and assignment event names are new in this slice and are
+not yet in `eia-contracts/asyncapi` (the contracts repository is owned separately); they are
+reported as a catalog follow-up. Every payload carries `claimId`, `claimNumber`, `policyId`,
 `claimantPartyId`, `businessBook`, `status`, `version`, and the reserve amounts as decimal
 strings (`reserveAmount`, `currentReserveAmount`, `reserveCurrency`), plus event-specific
 members. Task payloads add `taskId`, `taskNumber`, `title`, `status` (the task status),
 `claimStatus` (the parent claim status), `priority`, `dueDate`, `assignedTo`, and `taskVersion`;
-note payloads add `noteId`, `noteNumber`, `noteType`, `body`, and `author`. Task and note writes
-bump the claim version, so their aggregate version is the post-write claim version plus one.
+note payloads add `noteId`, `noteNumber`, `noteType`, `body`, and `author`; assignment
+payloads add `assignedAdjuster`, `assignedTeam`, `assignedAt`, and `assignedBy`. Task, note,
+and assignment writes bump the claim version, so their aggregate version is the post-write
+claim version plus one.
 
 Outbox rows are always written. HTTP dispatch and the Quartz job start only when
 `eia.outbox.enabled=true`; configure the subscriber endpoint with `EIA_OUTBOX_ENDPOINT`.

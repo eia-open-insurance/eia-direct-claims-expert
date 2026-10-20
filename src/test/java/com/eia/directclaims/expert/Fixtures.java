@@ -39,7 +39,16 @@ final class Fixtures {
         return new Claim(CLAIM_ID, TENANT, "DIRECT", "CLM-2026-0000001", POLICY_ID, CLAIMANT_ID,
                 claimType, status, LOSS_DATE, REPORT_DATE, "GL",
                 new BigDecimal("125000.0000"), "USD", authority, authority == null ? null : "USD",
-                false, new BigDecimal("125000.0000"), version,
+                false, null, null, null, null, new BigDecimal("125000.0000"), version,
+                Instant.parse("2026-03-18T09:00:00Z"), Instant.parse("2026-03-18T09:00:00Z"));
+    }
+
+    static Claim assignedClaim(String status, int version) {
+        return new Claim(CLAIM_ID, TENANT, "DIRECT", "CLM-2026-0000001", POLICY_ID, CLAIMANT_ID,
+                "BODILY_INJURY", status, LOSS_DATE, REPORT_DATE, "GL",
+                new BigDecimal("125000.0000"), "USD", new BigDecimal("500000.0000"), "USD",
+                false, "adjuster@example.com", "CASUALTY", NOW, "supervisor@example.com",
+                new BigDecimal("125000.0000"), version,
                 Instant.parse("2026-03-18T09:00:00Z"), Instant.parse("2026-03-18T09:00:00Z"));
     }
 

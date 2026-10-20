@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS claim (
     settlement_authority_amount NUMERIC(19,4),
     settlement_authority_currency CHAR(3),
     litigation_flag BOOLEAN NOT NULL DEFAULT FALSE,
+    assigned_adjuster VARCHAR(128),
+    assigned_team VARCHAR(64),
+    assigned_at TIMESTAMPTZ,
+    assigned_by VARCHAR(128),
     reserve_amount NUMERIC(19,4) NOT NULL DEFAULT 0,
     reserve_currency CHAR(3) NOT NULL DEFAULT 'USD',
     version INTEGER NOT NULL DEFAULT 0,
@@ -42,6 +46,10 @@ ALTER TABLE claim ADD COLUMN IF NOT EXISTS claim_type VARCHAR(32) NOT NULL DEFAU
 ALTER TABLE claim ADD COLUMN IF NOT EXISTS settlement_authority_amount NUMERIC(19,4);
 ALTER TABLE claim ADD COLUMN IF NOT EXISTS settlement_authority_currency CHAR(3);
 ALTER TABLE claim ADD COLUMN IF NOT EXISTS litigation_flag BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE claim ADD COLUMN IF NOT EXISTS assigned_adjuster VARCHAR(128);
+ALTER TABLE claim ADD COLUMN IF NOT EXISTS assigned_team VARCHAR(64);
+ALTER TABLE claim ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+ALTER TABLE claim ADD COLUMN IF NOT EXISTS assigned_by VARCHAR(128);
 
 ALTER TABLE claim DROP CONSTRAINT IF EXISTS ck_claim_claim_type;
 ALTER TABLE claim ADD CONSTRAINT ck_claim_claim_type CHECK (claim_type IN (

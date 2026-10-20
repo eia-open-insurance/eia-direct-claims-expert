@@ -52,3 +52,20 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
     command type and stored in `claim_command_idempotency`. A same-body retry replays the
     stored 201 response with `Idempotent-Replay: true` and writes no new row or event; a
     different body under the same key is 409 `EIA-DIR-4091` / `IDEMPOTENCY_KEY_REUSED`.
+- Claim assignment:
+  - Additive, idempotent `claim` columns `assigned_adjuster VARCHAR(128)`,
+    `assigned_team VARCHAR(64)`, `assigned_at TIMESTAMPTZ`, and `assigned_by VARCHAR(128)`
+    in the PostgreSQL and H2 schemas.
+  - `PATCH /api/v1/claims/{claimId}/assignment` and the `/internal/v1` alias accept
+    `{assignedAdjuster, assignedTeam, expectedVersion}`. Adjuster is required (1-128),
+    team is optional (at most 64), and the claim version is the optimistic token.
+  - Assignment and reassignment bump the claim version; a stale version is 409, unknown or
+    out-of-tenant/non-DIRECT claims are 404, and repeating the same assignment at the
+    current version is a 200 no-op with no event.
+  - Write `direct.claim.assigned` to the outbox in the same transaction with `claimId`,
+    `claimNumber`, `assignedAdjuster`, `assignedTeam`, `assignedAt`, `assignedBy`, and
+    `version`. `assignedBy` comes from the canonical `X-EIA-User` header (legacy
+    `X-EIA-Actor` also accepted), defaulting to `assignedAdjuster`.
+  - Claim list/get projections expose `assignedAdjuster`, `assignedTeam`, `assignedAt`, and
+    `assignedBy`; controller and H2 integration tests cover assign/reassign, stale version,
+    no-op, validation, tenant/book isolation, event payload, and rollback.

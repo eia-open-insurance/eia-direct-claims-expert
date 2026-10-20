@@ -11,6 +11,7 @@ import java.util.List;
 
 import static com.eia.directclaims.expert.Fixtures.CLAIM_ID;
 import static com.eia.directclaims.expert.Fixtures.TENANT;
+import static com.eia.directclaims.expert.Fixtures.assignedClaim;
 import static com.eia.directclaims.expert.Fixtures.claim;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -58,6 +59,20 @@ class ClaimControllerTest {
                 .andExpect(jsonPath("$[0].claimNumber").value("CLM-2026-0000001"))
                 .andExpect(jsonPath("$[0].businessBook").value("DIRECT"))
                 .andExpect(jsonPath("$[0].claimType").value("BODILY_INJURY"));
+    }
+
+    @Test
+    void listIncludesClaimAssignmentFields() throws Exception {
+        when(service.list(TENANT, null)).thenReturn(List.of(assignedClaim("REGISTERED", 4)));
+
+        mvc.perform(get(URL)
+                        .param("tenantId", TENANT.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].assignedAdjuster").value("adjuster@example.com"))
+                .andExpect(jsonPath("$[0].assignedTeam").value("CASUALTY"))
+                .andExpect(jsonPath("$[0].assignedAt").exists())
+                .andExpect(jsonPath("$[0].assignedBy").value("supervisor@example.com"));
     }
 
     @Test

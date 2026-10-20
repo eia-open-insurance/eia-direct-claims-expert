@@ -5,6 +5,8 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -18,7 +20,8 @@ public class ClaimRepository {
             c.id, c.tenant_id, c.business_book, c.claim_number, c.policy_id, c.claimant_party_id,
             c.claim_type, c.status, c.loss_date, c.report_date, c.cause_code, c.reserve_amount,
             c.reserve_currency, c.settlement_authority_amount, c.settlement_authority_currency,
-            c.litigation_flag, c.version, c.created_at, c.updated_at,
+            c.litigation_flag, c.assigned_adjuster, c.assigned_team, c.assigned_at, c.assigned_by,
+            c.version, c.created_at, c.updated_at,
             COALESCE((SELECT SUM(r.amount) FROM claim_reserve_history r
                        WHERE r.claim_id = c.id AND r.is_current), 0)::numeric(19,4)
                 AS current_reserve_amount
@@ -42,6 +45,10 @@ public class ClaimRepository {
             rs.getString("settlement_authority_currency") == null
                     ? null : rs.getString("settlement_authority_currency").trim(),
             rs.getBoolean("litigation_flag"),
+            rs.getString("assigned_adjuster"),
+            rs.getString("assigned_team"),
+            instant(rs, "assigned_at"),
+            rs.getString("assigned_by"),
             rs.getBigDecimal("current_reserve_amount"),
             rs.getInt("version"),
             rs.getTimestamp("created_at").toInstant(),
@@ -123,6 +130,33 @@ public class ClaimRepository {
     }
 
     /**
+     * Replaces the claim's assignment and bumps its optimistic version. The
+     * version predicate is the concurrency gate: zero updated rows means a
+     * concurrent writer won, and no assignment or event is written.
+     */
+    public Claim assign(UUID tenantId,
+                        UUID id,
+                        String assignedAdjuster,
+                        String assignedTeam,
+                        String assignedBy,
+                        int expectedVersion,
+                        Instant now) {
+        Timestamp timestamp = Timestamp.from(now);
+        int changed = jdbc.update("""
+                UPDATE claim
+                   SET assigned_adjuster = ?, assigned_team = ?, assigned_at = ?, assigned_by = ?,
+                       version = version + 1, updated_at = ?
+                 WHERE tenant_id = ? AND id = ? AND version = ? AND business_book = 'DIRECT'
+                """, assignedAdjuster, assignedTeam, timestamp, assignedBy, timestamp,
+                tenantId, id, expectedVersion);
+        if (changed == 0) {
+            throw new ClaimConflictException(
+                    "Claim " + id + " was modified concurrently or version " + expectedVersion + " is stale");
+        }
+        return findById(tenantId, id).orElseThrow(() -> new ClaimNotFoundException(id));
+    }
+
+    /**
      * Locks the claim row by bumping its version, used by the append-only
      * reserve history and the coverage decision in the same transaction.
      */
@@ -145,5 +179,10 @@ public class ClaimRepository {
                    SET litigation_flag = TRUE, updated_at = ?
                  WHERE tenant_id = ? AND id = ? AND business_book = 'DIRECT'
                 """, Timestamp.from(now), tenantId, id);
+    }
+
+    private static Instant instant(ResultSet rs, String column) throws SQLException {
+        Timestamp value = rs.getTimestamp(column);
+        return value == null ? null : value.toInstant();
     }
 }
