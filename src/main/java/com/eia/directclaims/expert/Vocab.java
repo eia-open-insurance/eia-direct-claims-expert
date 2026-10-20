@@ -83,6 +83,11 @@ final class Vocab {
     static final Set<String> LIEN_RESOLUTIONS = Set.of("PAID", "NEGOTIATED", "WAIVED", "DEFERRED");
     static final Set<String> TERMINAL_LIEN_STATUSES = Set.of("RESOLVED", "WAIVED", "PAID");
 
+    static final Set<String> TASK_PRIORITIES = Set.of("LOW", "NORMAL", "HIGH", "URGENT");
+    static final Set<String> TASK_STATUSES = Set.of("OPEN", "COMPLETE", "CANCELLED");
+    static final Set<String> NOTE_TYPES = Set.of(
+            "DIARY", "COVERAGE", "RESERVE", "LITIGATION", "SETTLEMENT", "GENERAL");
+
     static String normalize(Set<String> allowed, String raw, String field) {
         if (raw == null || raw.isBlank()) {
             throw new ClaimValidationException(field + " is required");

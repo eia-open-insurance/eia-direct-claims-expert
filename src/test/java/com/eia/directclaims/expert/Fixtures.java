@@ -21,8 +21,11 @@ final class Fixtures {
     static final UUID SETTLEMENT_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d36");
     static final UUID RECOVERY_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d37");
     static final UUID LIEN_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d38");
+    static final UUID TASK_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d39");
+    static final UUID NOTE_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d3a");
     static final LocalDate LOSS_DATE = LocalDate.of(2026, 3, 14);
     static final LocalDate REPORT_DATE = LocalDate.of(2026, 3, 18);
+    static final LocalDate TASK_DUE_DATE = LocalDate.of(2026, 4, 15);
     static final Instant NOW = Instant.parse("2026-03-18T09:00:00Z");
 
     private Fixtures() {
@@ -87,5 +90,21 @@ final class Fixtures {
         return new Lien(LIEN_ID, TENANT, CLAIM_ID, "MEDICARE", "Centers for Medicare & Medicaid Services",
                 new BigDecimal("15000.0000"), "USD", status, terminal ? "NEGOTIATED" : null,
                 terminal ? NOW : null, 1, NOW, NOW);
+    }
+
+    static ClaimTask task(String status, long version) {
+        return task(status, version, TASK_DUE_DATE);
+    }
+
+    static ClaimTask task(String status, long version, LocalDate dueDate) {
+        return new ClaimTask(TASK_ID, TENANT, CLAIM_ID, "TSK-2026-0000001",
+                "Review medical records", "Order records and index the file", dueDate, "HIGH",
+                status, "adjuster@example.com", version, NOW, NOW,
+                "COMPLETE".equals(status) ? NOW : null);
+    }
+
+    static ClaimNote note(String noteType, String body) {
+        return new ClaimNote(NOTE_ID, TENANT, CLAIM_ID, "NTE-2026-0000001", noteType, body,
+                "adjuster@example.com", NOW);
     }
 }

@@ -36,6 +36,14 @@ import java.util.UUID;
  * order. Payloads carry the claim identity, status, row version, and reserve
  * amounts as decimal strings (SPEC 7.6), plus the event-specific members.</p>
  *
+ * <p>Claim tasks and notes are children of the same aggregate. Their writes bump
+ * the claim row version too, so {@code direct.claim.task-created},
+ * {@code direct.claim.task-completed}, {@code direct.claim.task-updated}, and
+ * {@code direct.claim.note-added} stay monotonic with the claim lifecycle
+ * events. These four names are new in this slice and are not yet present in
+ * {@code eia-contracts/asyncapi}; the contracts repository is owned separately
+ * and the gap is reported for catalog follow-up.</p>
+ *
  * <p>Claim rows start at version 0 for API compatibility, while the canonical
  * envelope requires {@code aggregateVersion >= 1}. The envelope version is
  * therefore the claim's row version after the change plus one, matching the
@@ -48,6 +56,10 @@ final class ClaimEvents {
     static final String RESERVE_CHANGED = "direct.claim.reserve-changed";
     static final String SETTLEMENT_AUTHORIZED = "direct.claim.settlement-authorized";
     static final String CLOSED = "direct.claim.closed";
+    static final String TASK_CREATED = "direct.claim.task-created";
+    static final String TASK_COMPLETED = "direct.claim.task-completed";
+    static final String TASK_UPDATED = "direct.claim.task-updated";
+    static final String NOTE_ADDED = "direct.claim.note-added";
 
     private static final Book EVENT_BOOK = Book.DIRECT;
     private static final String VERTICAL = "direct";
@@ -176,6 +188,70 @@ final class ClaimEvents {
         data.put("closedAt", now);
         data.put("finalReserveAmount", money(after.currentReserveAmount()));
         return envelope(after, CLOSED, after.version() + 1L, now, data);
+    }
+
+    /**
+     * Task creation. The task starts at version 1; the claim row has already
+     * been bumped, so {@code claimVersion} is the post-write claim version.
+     */
+    static EventEnvelope taskCreated(Claim claim, ClaimTask task, int claimVersion, Instant now) {
+        Map<String, Object> data = identity(claim, claimVersion);
+        data.put("claimStatus", claim.status());
+        task(data, task);
+        return envelope(claim, TASK_CREATED, claimVersion + 1L, now, data);
+    }
+
+    /**
+     * Task status change. COMPLETE uses the lifecycle-specific
+     * {@code task-completed}; a cancellation or reopen uses {@code task-updated}
+     * with the before/after status.
+     */
+    static EventEnvelope taskStatusChanged(Claim claim, ClaimTask before, ClaimTask after,
+                                           int claimVersion, Instant now) {
+        Map<String, Object> data = identity(claim, claimVersion);
+        data.put("claimStatus", claim.status());
+        task(data, after);
+        data.put("changedFields", List.of("status"));
+        data.put("from", before.status());
+        data.put("to", after.status());
+        String eventType = "COMPLETE".equals(after.status()) ? TASK_COMPLETED : TASK_UPDATED;
+        return envelope(claim, eventType, claimVersion + 1L, now, data);
+    }
+
+    /**
+     * Append-only note. Notes have no row version of their own; the claim
+     * version keeps the event ordered with the rest of the claim stream.
+     */
+    static EventEnvelope noteAdded(Claim claim, ClaimNote note, int claimVersion, Instant now) {
+        Map<String, Object> data = identity(claim, claimVersion);
+        data.put("noteId", note.id());
+        data.put("noteNumber", note.noteNumber());
+        data.put("noteType", note.noteType());
+        data.put("body", note.body());
+        data.put("author", note.author());
+        data.put("createdAt", note.createdAt());
+        return envelope(claim, NOTE_ADDED, claimVersion + 1L, now, data);
+    }
+
+    private static void task(Map<String, Object> data, ClaimTask task) {
+        data.put("taskId", task.id());
+        data.put("taskNumber", task.taskNumber());
+        data.put("title", task.title());
+        if (task.description() != null) {
+            data.put("description", task.description());
+        }
+        data.put("status", task.status());
+        data.put("priority", task.priority());
+        data.put("dueDate", task.dueDate());
+        if (task.assignedTo() != null) {
+            data.put("assignedTo", task.assignedTo());
+        }
+        data.put("taskVersion", task.version());
+        data.put("taskCreatedAt", task.createdAt());
+        data.put("taskUpdatedAt", task.updatedAt());
+        if (task.completedAt() != null) {
+            data.put("completedAt", task.completedAt());
+        }
     }
 
     /**

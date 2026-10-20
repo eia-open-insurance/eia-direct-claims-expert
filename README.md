@@ -34,7 +34,8 @@ $env:JAVA_HOME='C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
 The service listens on **8087**. `src/main/resources/schema.sql` creates the claim tables,
 sequences, indexes, the book/date/reserve check constraints, and the transactional outbox on
 startup. It is idempotent and additive: the second slice adds injuries, exposures, reserve
-history, coverage decisions, litigation, settlements, recoveries, liens, and `outbox_event`.
+history, coverage decisions, litigation, settlements, recoveries, liens, and `outbox_event`;
+the third slice adds claim tasks and append-only diary notes.
 
 Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404):
 
@@ -52,6 +53,22 @@ Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404
   `POST .../settlements/{settlementId}/execute`
 - `GET|POST /internal/v1/claims/{id}/recoveries`, `PATCH .../recoveries/{recoveryId}`
 - `GET|POST /internal/v1/claims/{id}/liens`, `PATCH .../liens/{lienId}`
+- `GET|POST /internal/v1/claims/{id}/tasks`, `PATCH .../tasks/{taskId}`
+- `GET|POST /internal/v1/claims/{id}/notes`
+
+The task and note routes are also exposed on the public prefix
+`/api/v1/claims/{claimId}/tasks` and `/api/v1/claims/{claimId}/notes`. `GET` accepts
+either `?tenantId={uuid}` or `X-EIA-Tenant`; writes take `X-EIA-Tenant`.
+
+Tasks are returned open-first ordered by due date, then cancelled, then completed
+(newest completion first). A task starts at version 1 and `PATCH` takes
+`{ "status": "COMPLETE", "version": 1 }`; a stale version is 409. Repeating the
+current status is an idempotent no-op. Notes are append-only and returned newest
+first; there is no update or delete route. Both resources are tenant- and
+claim-scoped, so a claim outside the tenant or the DIRECT book is 404. The
+service has no existing `Idempotency-Key` table (unlike Policy), so create
+commands rely on strict validation, unique task/note numbers, and deterministic
+outbox event ids rather than replay deduplication.
 
 Money is serialized as a decimal string. The claim's current reserve is derived from the
 current rows of `claim_reserve_history`; `reserve_amount` is the initial reserve seeded at
@@ -72,13 +89,22 @@ The service publishes the names from `eia-contracts/asyncapi/event-catalog.yaml`
 | `POST .../coverage` | `direct.claim.coverage-assessed` |
 | `POST .../reserves` | `direct.claim.reserve-changed` |
 | `POST .../settlements/{id}/approve` | `direct.claim.settlement-authorized` |
+| `POST .../tasks` | `direct.claim.task-created` |
+| `PATCH .../tasks/{taskId}` to COMPLETE | `direct.claim.task-completed` |
+| `PATCH .../tasks/{taskId}` to CANCELLED or reopened | `direct.claim.task-updated` |
+| `POST .../notes` | `direct.claim.note-added` |
 
 The requested slice names `direct.claim.created`, `direct.claim.coverage-decided`, and
 `direct.claim.settlement-approved` are not in the catalog; the catalog names above are
-published instead. Every payload carries `claimId`, `claimNumber`, `policyId`,
+published instead. The task and note event names are new in this slice and are not yet in
+`eia-contracts/asyncapi` (the contracts repository is owned separately); they are reported as a
+catalog follow-up. Every payload carries `claimId`, `claimNumber`, `policyId`,
 `claimantPartyId`, `businessBook`, `status`, `version`, and the reserve amounts as decimal
 strings (`reserveAmount`, `currentReserveAmount`, `reserveCurrency`), plus event-specific
-members.
+members. Task payloads add `taskId`, `taskNumber`, `title`, `status` (the task status),
+`claimStatus` (the parent claim status), `priority`, `dueDate`, `assignedTo`, and `taskVersion`;
+note payloads add `noteId`, `noteNumber`, `noteType`, `body`, and `author`. Task and note writes
+bump the claim version, so their aggregate version is the post-write claim version plus one.
 
 Outbox rows are always written. HTTP dispatch and the Quartz job start only when
 `eia.outbox.enabled=true`; configure the subscriber endpoint with `EIA_OUTBOX_ENDPOINT`.

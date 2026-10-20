@@ -4,7 +4,8 @@ import java.util.UUID;
 
 /**
  * Raised when a child record (injury, exposure, reserve, coverage, litigation,
- * settlement, recovery, or lien) does not exist for the claim. Mapped to 404.
+ * settlement, recovery, lien, task, or note) does not exist for the claim.
+ * Mapped to 404.
  */
 public class RecordNotFoundException extends RuntimeException {
     public RecordNotFoundException(String message) {
