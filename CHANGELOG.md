@@ -48,3 +48,7 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
     `direct.claim.task-completed`, `direct.claim.task-updated`, and
     `direct.claim.note-added`; task/note writes bump the claim version so event aggregate
     versions stay monotonic, and rollback tests cover both resources.
+  - Optional `Idempotency-Key` on the task and note create routes, scoped by tenant and
+    command type and stored in `claim_command_idempotency`. A same-body retry replays the
+    stored 201 response with `Idempotent-Replay: true` and writes no new row or event; a
+    different body under the same key is 409 `EIA-DIR-4091` / `IDEMPOTENCY_KEY_REUSED`.

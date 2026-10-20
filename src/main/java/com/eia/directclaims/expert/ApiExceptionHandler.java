@@ -5,6 +5,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+import java.net.URI;
 import java.util.List;
 
 @RestControllerAdvice
@@ -75,6 +78,25 @@ public class ApiExceptionHandler {
     @ExceptionHandler(ClaimConflictException.class)
     public ResponseEntity<ApiError> conflict(ClaimConflictException ex, HttpServletRequest request) {
         return error(HttpStatus.CONFLICT, "CONFLICT", ex.getMessage(), request, null);
+    }
+
+    /**
+     * An Idempotency-Key replay with a different canonical request body. The
+     * stable code/category pair is part of the Direct Claims contract.
+     */
+    @ExceptionHandler(IdempotencyKeyReusedException.class)
+    public ResponseEntity<ProblemDetail> idempotencyKeyReused(IdempotencyKeyReusedException ex,
+                                                              HttpServletRequest request) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
+        problem.setTitle("Idempotency-Key reused");
+        problem.setType(URI.create("https://errors.eia.example/eia-dir-4091"));
+        problem.setInstance(URI.create(request.getRequestURI()));
+        problem.setProperty("code", "EIA-DIR-4091");
+        problem.setProperty("category", "IDEMPOTENCY_KEY_REUSED");
+        problem.setProperty("retryable", false);
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem);
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)

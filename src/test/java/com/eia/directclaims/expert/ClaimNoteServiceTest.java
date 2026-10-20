@@ -3,6 +3,7 @@ package com.eia.directclaims.expert;
 import com.eia.platform.libs.events.EventJson;
 import com.eia.platform.libs.outbox.OutboxEvent;
 import com.eia.platform.libs.outbox.OutboxRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -43,13 +44,17 @@ class ClaimNoteServiceTest {
     private ClaimRepository claimRepository;
     @Mock
     private OutboxRepository outbox;
+    @Mock
+    private ClaimCommandIdempotencyRepository idempotency;
+
+    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     private ClaimNoteService service;
 
     @BeforeEach
     void setUp() {
         service = new ClaimNoteService(repository, claimRepository, new ClaimLookup(claimRepository),
-                outbox, Clock.fixed(NOW, ZoneOffset.UTC));
+                outbox, idempotency, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test

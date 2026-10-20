@@ -335,6 +335,28 @@ CREATE INDEX IF NOT EXISTS ix_claim_note_created
     ON claim_note (tenant_id, claim_id, created_at DESC);
 
 -- ---------------------------------------------------------------------------
+-- Idempotency for the task and note create commands. The key is scoped by
+-- tenant and command type, so the same value may be used for one task create
+-- and one note create. The row is written in the same transaction as the child
+-- record: a rollback leaves no reservation, while a replay returns the stored
+-- original 201 response without creating a second row or outbox event.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS claim_command_idempotency (
+    tenant_id UUID NOT NULL,
+    idempotency_key VARCHAR(64) NOT NULL,
+    command_type VARCHAR(32) NOT NULL,
+    request_hash CHAR(64) NOT NULL,
+    response_status INTEGER NOT NULL,
+    response_body JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT pk_claim_command_idempotency
+        PRIMARY KEY (tenant_id, idempotency_key, command_type)
+);
+
+CREATE INDEX IF NOT EXISTS ix_claim_command_idempotency_created
+    ON claim_command_idempotency (tenant_id, command_type, created_at DESC);
+
+-- ---------------------------------------------------------------------------
 -- Transactional outbox (SPEC 7.5.1). The canonical copy lives in
 -- eia-platform/libs/src/main/resources/db/outbox_event.sql; keep both in sync.
 -- Claim writes append their domain event here in the same transaction.

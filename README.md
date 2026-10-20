@@ -65,10 +65,17 @@ Tasks are returned open-first ordered by due date, then cancelled, then complete
 `{ "status": "COMPLETE", "version": 1 }`; a stale version is 409. Repeating the
 current status is an idempotent no-op. Notes are append-only and returned newest
 first; there is no update or delete route. Both resources are tenant- and
-claim-scoped, so a claim outside the tenant or the DIRECT book is 404. The
-service has no existing `Idempotency-Key` table (unlike Policy), so create
-commands rely on strict validation, unique task/note numbers, and deterministic
-outbox event ids rather than replay deduplication.
+claim-scoped, so a claim outside the tenant or the DIRECT book is 404.
+
+The task and note create routes accept an optional `Idempotency-Key` (trimmed,
+1-64 printable ASCII characters; a UUID is recommended). The key is scoped by
+tenant and command type (`TASK_CREATE` or `NOTE_CREATE`) and stored in
+`claim_command_idempotency` with a canonical request hash and the original 201
+response body. A retry with the same key and the same canonical body returns the
+stored 201 body with `Idempotent-Replay: true` and writes no second row or outbox
+event. Reusing the key with a different body is 409 `application/problem+json`
+with code `EIA-DIR-4091` and category `IDEMPOTENCY_KEY_REUSED`. Without a key the
+create behaviour is unchanged.
 
 Money is serialized as a decimal string. The claim's current reserve is derived from the
 current rows of `claim_reserve_history`; `reserve_amount` is the initial reserve seeded at

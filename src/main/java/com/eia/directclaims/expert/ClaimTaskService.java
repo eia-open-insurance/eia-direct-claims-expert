@@ -2,6 +2,8 @@ package com.eia.directclaims.expert;
 
 import com.eia.platform.libs.outbox.OutboxEvent;
 import com.eia.platform.libs.outbox.OutboxRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -10,6 +12,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -21,6 +24,12 @@ import java.util.UUID;
  * version is the optimistic concurrency token exposed by PATCH; a stale token
  * is 409 and a command that repeats the current status is a no-op that writes
  * no event.</p>
+ *
+ * <p>Create accepts an optional {@code Idempotency-Key}. The key and the
+ * canonical request hash are stored in the same transaction as the task, so a
+ * rollback leaves no key behind. An identical retry returns the original 201
+ * body and writes neither a second task nor a second event; a different body
+ * under the same key is 409 {@code EIA-DIR-4091}.</p>
  */
 @Service
 public class ClaimTaskService {
@@ -28,25 +37,34 @@ public class ClaimTaskService {
     private final ClaimRepository claimRepository;
     private final ClaimLookup claims;
     private final OutboxRepository outbox;
+    private final ClaimCommandIdempotencyRepository idempotency;
+    private final ObjectMapper objectMapper;
     private final Clock clock;
 
     @Autowired
     public ClaimTaskService(ClaimTaskRepository repository,
                             ClaimRepository claimRepository,
                             ClaimLookup claims,
-                            OutboxRepository outbox) {
-        this(repository, claimRepository, claims, outbox, Clock.systemUTC());
+                            OutboxRepository outbox,
+                            ClaimCommandIdempotencyRepository idempotency,
+                            ObjectMapper objectMapper) {
+        this(repository, claimRepository, claims, outbox, idempotency, objectMapper,
+                Clock.systemUTC());
     }
 
     ClaimTaskService(ClaimTaskRepository repository,
                      ClaimRepository claimRepository,
                      ClaimLookup claims,
                      OutboxRepository outbox,
+                     ClaimCommandIdempotencyRepository idempotency,
+                     ObjectMapper objectMapper,
                      Clock clock) {
         this.repository = repository;
         this.claimRepository = claimRepository;
         this.claims = claims;
         this.outbox = outbox;
+        this.idempotency = idempotency;
+        this.objectMapper = objectMapper;
         this.clock = clock;
     }
 
@@ -55,8 +73,27 @@ public class ClaimTaskService {
         return repository.findAll(tenantId, claimId);
     }
 
+    /** Compatibility overload for callers that do not use idempotency keys. */
     @Transactional
     public ClaimTask create(UUID tenantId, UUID claimId, CreateTaskRequest request) {
+        return create(tenantId, claimId, request, null).value();
+    }
+
+    @Transactional
+    public ClaimCommandResult<ClaimTask> create(UUID tenantId,
+                                                UUID claimId,
+                                                CreateTaskRequest request,
+                                                String rawIdempotencyKey) {
+        String idempotencyKey = IdempotencyKeys.normalize(rawIdempotencyKey);
+        String requestHash = IdempotencyKeys.taskHash(claimId, request);
+        if (idempotencyKey != null) {
+            Optional<ClaimCommandIdempotency> existing = idempotency.find(
+                    tenantId, idempotencyKey, ClaimCommandIdempotencyRepository.TASK_CREATE);
+            if (existing.isPresent()) {
+                return replay(existing.get(), requestHash);
+            }
+        }
+
         Claim claim = claims.require(tenantId, claimId);
         String title = Vocab.requiredText(request.title(), "title", 200);
         String description = Vocab.optionalText(request.description(), 4000);
@@ -71,7 +108,13 @@ public class ClaimTaskService {
                 description, dueDate, priority, assignedTo, now);
         int claimVersion = claimRepository.bumpVersion(tenantId, claimId, claim.version(), now);
         outbox.insert(OutboxEvent.fromEnvelope(ClaimEvents.taskCreated(claim, task, claimVersion, now)));
-        return task;
+
+        String body = json(task);
+        if (idempotencyKey != null) {
+            idempotency.insert(tenantId, idempotencyKey,
+                    ClaimCommandIdempotencyRepository.TASK_CREATE, requestHash, 201, body, now);
+        }
+        return new ClaimCommandResult<>(task, body, false, idempotencyKey != null);
     }
 
     @Transactional
@@ -104,6 +147,22 @@ public class ClaimTaskService {
         outbox.insert(OutboxEvent.fromEnvelope(
                 ClaimEvents.taskStatusChanged(claim, current, after, claimVersion, now)));
         return after;
+    }
+
+    private ClaimCommandResult<ClaimTask> replay(ClaimCommandIdempotency record, String requestHash) {
+        if (!record.requestHash().equals(requestHash)) {
+            throw new IdempotencyKeyReusedException(
+                    "Idempotency-Key was already used with a different request.");
+        }
+        return new ClaimCommandResult<>(null, record.responseBody(), true, true);
+    }
+
+    private String json(ClaimTask task) {
+        try {
+            return objectMapper.writeValueAsString(task);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Could not serialize the claim task response", ex);
+        }
     }
 
     /**

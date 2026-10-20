@@ -155,6 +155,23 @@ CREATE TABLE IF NOT EXISTS claim_note (
 CREATE INDEX IF NOT EXISTS ix_claim_note_created
     ON claim_note (tenant_id, claim_id, created_at DESC);
 
+-- H2-compatible copy of the command idempotency table. The production column is
+-- jsonb; here it is TEXT so the plain bound parameter can be read back as JSON.
+CREATE TABLE IF NOT EXISTS claim_command_idempotency (
+    tenant_id UUID NOT NULL,
+    idempotency_key VARCHAR(64) NOT NULL,
+    command_type VARCHAR(32) NOT NULL,
+    request_hash CHAR(64) NOT NULL,
+    response_status INTEGER NOT NULL,
+    response_body TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT pk_claim_command_idempotency
+        PRIMARY KEY (tenant_id, idempotency_key, command_type)
+);
+
+CREATE INDEX IF NOT EXISTS ix_claim_command_idempotency_created
+    ON claim_command_idempotency (tenant_id, command_type, created_at DESC);
+
 -- H2-compatible copy of the PostgreSQL outbox table. JSON payloads are TEXT
 -- here; production DDL uses jsonb.
 CREATE TABLE IF NOT EXISTS outbox_event (
