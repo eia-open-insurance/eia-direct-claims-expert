@@ -25,3 +25,13 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   - `POST /close` with unresolved-lien and open-reserve closure criteria.
   - `DirectClaimsLiveSmokeTest` against real PostgreSQL and
     `scripts/live-smoke-domain.ps1` through the domain API.
+- Transactional outbox production (SPEC 7.5.1):
+  - Composite build against `eia-platform` and `com.eia:libs`, Quartz dispatch scheduling
+    gated by `eia.outbox.enabled`, and H2 test runtime.
+  - `outbox_event` DDL in `schema.sql` and the H2 component-test schema.
+  - Canonical events written in the claim transaction: `direct.claim.registered`,
+    `direct.claim.updated`, `direct.claim.closed`, `direct.claim.coverage-assessed`,
+    `direct.claim.reserve-changed`, and `direct.claim.settlement-authorized`.
+  - Payloads carry claim identity, status, version, and reserve amounts as decimal strings
+    plus event-specific fields; integration tests cover payloads and rollback for create,
+    coverage, reserve, settlement, and close.

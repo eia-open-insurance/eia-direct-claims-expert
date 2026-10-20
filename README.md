@@ -32,9 +32,9 @@ $env:JAVA_HOME='C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
 ```
 
 The service listens on **8087**. `src/main/resources/schema.sql` creates the claim tables,
-sequences, indexes, and the book/date/reserve check constraints on startup. It is idempotent
-and additive: the second slice adds injuries, exposures, reserve history, coverage decisions,
-litigation, settlements, recoveries, and liens.
+sequences, indexes, the book/date/reserve check constraints, and the transactional outbox on
+startup. It is idempotent and additive: the second slice adds injuries, exposures, reserve
+history, coverage decisions, litigation, settlements, recoveries, liens, and `outbox_event`.
 
 Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404):
 
@@ -57,9 +57,37 @@ Money is serialized as a decimal string. The claim's current reserve is derived 
 current rows of `claim_reserve_history`; `reserve_amount` is the initial reserve seeded at
 registration.
 
+## Transactional outbox
+
+Claim writes append a canonical domain event to `outbox_event` in the same transaction as the
+aggregate change (SPEC 7.5.1), so a rollback leaves neither the change nor the event behind.
+The service publishes the names from `eia-contracts/asyncapi/event-catalog.yaml` and
+`direct-claims.yaml`:
+
+| Trigger | Event type |
+| --- | --- |
+| `POST /internal/v1/claims` | `direct.claim.registered` |
+| Status change (except CLOSED) | `direct.claim.updated` |
+| Status change to CLOSED or `POST .../close` | `direct.claim.closed` |
+| `POST .../coverage` | `direct.claim.coverage-assessed` |
+| `POST .../reserves` | `direct.claim.reserve-changed` |
+| `POST .../settlements/{id}/approve` | `direct.claim.settlement-authorized` |
+
+The requested slice names `direct.claim.created`, `direct.claim.coverage-decided`, and
+`direct.claim.settlement-approved` are not in the catalog; the catalog names above are
+published instead. Every payload carries `claimId`, `claimNumber`, `policyId`,
+`claimantPartyId`, `businessBook`, `status`, `version`, and the reserve amounts as decimal
+strings (`reserveAmount`, `currentReserveAmount`, `reserveCurrency`), plus event-specific
+members.
+
+Outbox rows are always written. HTTP dispatch and the Quartz job start only when
+`eia.outbox.enabled=true`; configure the subscriber endpoint with `EIA_OUTBOX_ENDPOINT`.
+Retry, lease, batch, and cadence values live under `eia.outbox` in `application.yml`.
+
 ## Verification
 
-- `.\gradlew build` - unit and controller tests (the `live` tag is excluded).
+- `.\gradlew build` - unit, controller, and H2 outbox/scheduling tests (the `live` tag is
+  excluded).
 - `.\gradlew test -Plive` - the live PostgreSQL smoke (`DirectClaimsLiveSmokeTest`).
 - `pwsh ./scripts/live-smoke-domain.ps1` - full journey through the domain API with both
   services running; it creates a fresh tenant and exercises injury, coverage, reserve,

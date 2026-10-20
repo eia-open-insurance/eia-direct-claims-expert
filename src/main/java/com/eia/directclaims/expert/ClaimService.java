@@ -1,5 +1,7 @@
 package com.eia.directclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,25 +21,30 @@ public class ClaimService {
     private final CoverageRepository coverageRepository;
     private final ReserveRepository reserveRepository;
     private final LienRepository lienRepository;
+    private final OutboxRepository outbox;
     private final Clock clock;
 
     @Autowired
     public ClaimService(ClaimRepository repository,
                         CoverageRepository coverageRepository,
                         ReserveRepository reserveRepository,
-                        LienRepository lienRepository) {
-        this(repository, coverageRepository, reserveRepository, lienRepository, Clock.systemUTC());
+                        LienRepository lienRepository,
+                        OutboxRepository outbox) {
+        this(repository, coverageRepository, reserveRepository, lienRepository, outbox,
+                Clock.systemUTC());
     }
 
     ClaimService(ClaimRepository repository,
                  CoverageRepository coverageRepository,
                  ReserveRepository reserveRepository,
                  LienRepository lienRepository,
+                 OutboxRepository outbox,
                  Clock clock) {
         this.repository = repository;
         this.coverageRepository = coverageRepository;
         this.reserveRepository = reserveRepository;
         this.lienRepository = lienRepository;
+        this.outbox = outbox;
         this.clock = clock;
     }
 
@@ -102,10 +109,13 @@ public class ClaimService {
                 request.claimantPartyId(), claimType, initial, request.lossDate(), request.reportDate(),
                 causeCode, reserve, currency, authority, authorityCurrency, now);
         reserveRepository.seedInitial(request.tenantId(), created.id(), reserve, currency, now);
-        return repository.findById(request.tenantId(), created.id())
+        Claim registered = repository.findById(request.tenantId(), created.id())
                 .orElseThrow(() -> new ClaimNotFoundException(created.id()));
+        outbox.insert(OutboxEvent.fromEnvelope(ClaimEvents.registered(registered, now)));
+        return registered;
     }
 
+    @Transactional
     public Claim changeStatus(UUID tenantId, UUID id, String rawStatus, Integer expectedVersion) {
         Claim current = get(tenantId, id);
         ClaimStatus next = ClaimStatus.from(rawStatus);
@@ -127,7 +137,12 @@ public class ClaimService {
             throw new ClaimConflictException("Claim version " + expected
                     + " does not match current version " + current.version());
         }
-        return repository.updateStatus(tenantId, id, next, expected, Instant.now(clock));
+        Instant now = Instant.now(clock);
+        Claim after = repository.updateStatus(tenantId, id, next, expected, now);
+        outbox.insert(OutboxEvent.fromEnvelope(next == ClaimStatus.CLOSED
+                ? ClaimEvents.closed(current, after, now)
+                : ClaimEvents.statusUpdated(current, after, now)));
+        return after;
     }
 
     /**
@@ -155,7 +170,10 @@ public class ClaimService {
             throw new ClaimValidationException(
                     "Claim status " + currentStatus + " cannot move to CLOSED");
         }
-        return repository.updateStatus(tenantId, id, ClaimStatus.CLOSED, expected, Instant.now(clock));
+        Instant now = Instant.now(clock);
+        Claim after = repository.updateStatus(tenantId, id, ClaimStatus.CLOSED, expected, now);
+        outbox.insert(OutboxEvent.fromEnvelope(ClaimEvents.closed(current, after, now)));
+        return after;
     }
 
     private void requireCoverageBeforeOpen(UUID tenantId, UUID id) {

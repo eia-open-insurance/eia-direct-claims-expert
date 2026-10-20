@@ -1,7 +1,10 @@
 package com.eia.directclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -12,18 +15,23 @@ import java.util.UUID;
 
 @Service
 public class ReserveService {
+    private static final BigDecimal ZERO = new BigDecimal("0.0000");
+
     private final ReserveRepository repository;
     private final ClaimLookup claims;
+    private final OutboxRepository outbox;
     private final Clock clock;
 
     @Autowired
-    public ReserveService(ReserveRepository repository, ClaimLookup claims) {
-        this(repository, claims, Clock.systemUTC());
+    public ReserveService(ReserveRepository repository, ClaimLookup claims, OutboxRepository outbox) {
+        this(repository, claims, outbox, Clock.systemUTC());
     }
 
-    ReserveService(ReserveRepository repository, ClaimLookup claims, Clock clock) {
+    ReserveService(ReserveRepository repository, ClaimLookup claims, OutboxRepository outbox,
+                   Clock clock) {
         this.repository = repository;
         this.claims = claims;
+        this.outbox = outbox;
         this.clock = clock;
     }
 
@@ -43,9 +51,10 @@ public class ReserveService {
 
     /**
      * Establishes or changes one component. The request amount is the new
-     * component amount, not a delta; the previous current row is closed and the
-     * new row appended in one transaction.
+     * component amount, not a delta; the previous current row is closed, the
+     * new row appended, and the event written in one transaction.
      */
+    @Transactional
     public ReserveHistoryEntry change(UUID tenantId, UUID claimId, ReserveChangeRequest request) {
         Claim claim = claims.require(tenantId, claimId);
         String component = Vocab.normalize(Vocab.RESERVE_COMPONENTS, request.component(), "component");
@@ -64,8 +73,23 @@ public class ReserveService {
             throw new ClaimValidationException(
                     "authority is required when a reserve exceeds the claim settlement authority");
         }
-        return repository.postChange(claim, component, amount, currency, effectiveDate, reason,
-                Vocab.optionalText(request.reasonText(), 4000), authority, expectedVersion, Instant.now(clock));
+        List<ReserveHistoryEntry> current = repository.findCurrent(tenantId, claimId);
+        BigDecimal previousAmount = current.stream()
+                .filter(entry -> component.equals(entry.component()))
+                .map(ReserveHistoryEntry::amount)
+                .findFirst()
+                .orElse(ZERO);
+        BigDecimal totalBefore = current.stream()
+                .map(ReserveHistoryEntry::amount)
+                .reduce(ZERO, BigDecimal::add);
+        Instant now = Instant.now(clock);
+        ReserveHistoryEntry entry = repository.postChange(claim, component, amount, currency,
+                effectiveDate, reason, Vocab.optionalText(request.reasonText(), 4000), authority,
+                expectedVersion, now);
+        BigDecimal totalAfter = totalBefore.subtract(previousAmount).add(amount);
+        outbox.insert(OutboxEvent.fromEnvelope(
+                ClaimEvents.reserveChanged(claim, entry, previousAmount, totalAfter, now)));
+        return entry;
     }
 
     private static boolean requiresAuthority(Claim claim, BigDecimal amount) {

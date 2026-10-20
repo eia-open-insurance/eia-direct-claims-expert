@@ -1,7 +1,10 @@
 package com.eia.directclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -15,22 +18,30 @@ public class SettlementService {
     private final SettlementRepository repository;
     private final CoverageRepository coverageRepository;
     private final ClaimLookup claims;
+    private final ClaimRepository claimRepository;
+    private final OutboxRepository outbox;
     private final Clock clock;
 
     @Autowired
     public SettlementService(SettlementRepository repository,
                              CoverageRepository coverageRepository,
-                             ClaimLookup claims) {
-        this(repository, coverageRepository, claims, Clock.systemUTC());
+                             ClaimLookup claims,
+                             ClaimRepository claimRepository,
+                             OutboxRepository outbox) {
+        this(repository, coverageRepository, claims, claimRepository, outbox, Clock.systemUTC());
     }
 
     SettlementService(SettlementRepository repository,
                       CoverageRepository coverageRepository,
                       ClaimLookup claims,
+                      ClaimRepository claimRepository,
+                      OutboxRepository outbox,
                       Clock clock) {
         this.repository = repository;
         this.coverageRepository = coverageRepository;
         this.claims = claims;
+        this.claimRepository = claimRepository;
+        this.outbox = outbox;
         this.clock = clock;
     }
 
@@ -57,7 +68,12 @@ public class SettlementService {
      * DIR-08: authorization cannot exceed the claim's settlement authority, and
      * the remaining authority already committed by other authorized or executed
      * settlements is deducted first.
+     *
+     * <p>Authorization bumps the claim version (as coverage and reserve writes
+     * already do) so the claim's event aggregate version stays monotonic, then
+     * appends the settlement event in the same transaction.</p>
      */
+    @Transactional
     public Settlement approve(UUID tenantId,
                               UUID claimId,
                               UUID settlementId,
@@ -87,8 +103,13 @@ public class SettlementService {
             throw new ClaimValidationException("Settlement amount " + settlement.amount()
                     + " exceeds the remaining settlement authority " + remaining);
         }
-        return repository.authorize(tenantId, claimId, settlementId, approvalAuthority, authorizedBy,
-                expectedVersion, Instant.now(clock));
+        Instant now = Instant.now(clock);
+        int claimVersion = claimRepository.bumpVersion(tenantId, claimId, claim.version(), now);
+        Settlement authorized = repository.authorize(tenantId, claimId, settlementId,
+                approvalAuthority, authorizedBy, expectedVersion, now);
+        outbox.insert(OutboxEvent.fromEnvelope(
+                ClaimEvents.settlementAuthorized(claim, authorized, claimVersion, now)));
+        return authorized;
     }
 
     public Settlement execute(UUID tenantId,

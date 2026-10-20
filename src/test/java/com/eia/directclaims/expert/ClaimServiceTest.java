@@ -1,5 +1,6 @@
 package com.eia.directclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,13 +39,16 @@ class ClaimServiceTest {
     private ReserveRepository reserveRepository;
     @Mock
     private LienRepository lienRepository;
+    @Mock
+    private OutboxRepository outbox;
 
     private ClaimService service;
 
     @BeforeEach
     void setUp() {
         Clock clock = Clock.fixed(Instant.parse("2026-03-18T09:00:00Z"), ZoneOffset.UTC);
-        service = new ClaimService(repository, coverageRepository, reserveRepository, lienRepository, clock);
+        service = new ClaimService(repository, coverageRepository, reserveRepository, lienRepository,
+                outbox, clock);
     }
 
     @Test

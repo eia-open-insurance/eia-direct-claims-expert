@@ -1,7 +1,10 @@
 package com.eia.directclaims.expert;
 
+import com.eia.platform.libs.outbox.OutboxEvent;
+import com.eia.platform.libs.outbox.OutboxRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -15,25 +18,29 @@ public class CoverageService {
     private final InjuryRepository injuryRepository;
     private final ExposureRepository exposureRepository;
     private final ClaimLookup claims;
+    private final OutboxRepository outbox;
     private final Clock clock;
 
     @Autowired
     public CoverageService(CoverageRepository repository,
                            InjuryRepository injuryRepository,
                            ExposureRepository exposureRepository,
-                           ClaimLookup claims) {
-        this(repository, injuryRepository, exposureRepository, claims, Clock.systemUTC());
+                           ClaimLookup claims,
+                           OutboxRepository outbox) {
+        this(repository, injuryRepository, exposureRepository, claims, outbox, Clock.systemUTC());
     }
 
     CoverageService(CoverageRepository repository,
                     InjuryRepository injuryRepository,
                     ExposureRepository exposureRepository,
                     ClaimLookup claims,
+                    OutboxRepository outbox,
                     Clock clock) {
         this.repository = repository;
         this.injuryRepository = injuryRepository;
         this.exposureRepository = exposureRepository;
         this.claims = claims;
+        this.outbox = outbox;
         this.clock = clock;
     }
 
@@ -43,6 +50,12 @@ public class CoverageService {
                 .orElseThrow(() -> new CoverageDecisionNotFoundException(claimId));
     }
 
+    /**
+     * Records a final coverage decision and appends its event in the same
+     * transaction. The repository bumps the claim version as part of the
+     * decision, so the event version is the pre-change version plus one.
+     */
+    @Transactional
     public CoverageDecision decide(UUID tenantId, UUID claimId, CoverageDecisionRequest request) {
         Claim claim = claims.require(tenantId, claimId);
         String position = Vocab.normalize(Vocab.COVERAGE_POSITIONS, request.position(), "position");
@@ -60,9 +73,14 @@ public class CoverageService {
         if (!"DENIED".equals(position)) {
             requireInjuryOrExposure(claim);
         }
-        return repository.decide(claim, position, basis,
+        Instant now = Instant.now(clock);
+        CoverageDecision decision = repository.decide(claim, position, basis,
                 Vocab.optionalText(request.policyProvisions(), 8000), allocationMethod, allocationPct,
-                decisionDate, reviewer, Instant.now(clock));
+                decisionDate, reviewer, now);
+        int claimVersion = claim.version() + 1;
+        outbox.insert(OutboxEvent.fromEnvelope(
+                ClaimEvents.coverageAssessed(claim, decision, claimVersion, now)));
+        return decision;
     }
 
     /**
