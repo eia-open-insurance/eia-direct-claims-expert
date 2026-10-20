@@ -36,7 +36,7 @@ sequences, indexes, the book/date/reserve check constraints, and the transaction
 startup. It is idempotent and additive: the second slice adds injuries, exposures, reserve
 history, coverage decisions, litigation, settlements, recoveries, liens, and `outbox_event`;
 the third slice adds claim tasks and append-only diary notes; the fourth slice adds claim
-assignment fields to `claim`.
+assignment fields to `claim`; the allocation slice adds `claim_allocation`.
 
 Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404):
 
@@ -61,6 +61,17 @@ Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404
 The task and note routes are also exposed on the public prefix
 `/api/v1/claims/{claimId}/tasks` and `/api/v1/claims/{claimId}/notes`. `GET` accepts
 either `?tenantId={uuid}` or `X-EIA-Tenant`; writes take `X-EIA-Tenant`.
+
+Claim allocations are exposed at `GET|POST /api/v1/claims/{claimId}/allocations`, with the
+`/internal/v1` alias the domain service uses. `GET` returns `{items, totalPct, totalAmount}`
+oldest first and accepts either `?tenantId={uuid}` or `X-EIA-Tenant`; `POST` takes
+`X-EIA-Tenant` and `{policyId, policyYear, layer, allocationPct, allocatedAmount}` and
+returns 201. The policy must be the claim's own policy (400 `POLICY_MISMATCH`), the year is
+1900-2200, the layer is at most 32 characters, the percentage is in (0, 1], and the
+percentages across one claim may not sum above 1 (409 `ALLOCATION_EXCEEDS_100`). The
+allocated amount is a booking figure and is not capped by the current reserve. Allocation
+writes bump the claim version and write `direct.claim.allocation-created` in the same
+transaction.
 
 Claim assignment uses `PATCH /api/v1/claims/{claimId}/assignment` (or the internal alias)
 with `{ "assignedAdjuster": "adjuster@example.com", "assignedTeam": "CASUALTY",
@@ -120,6 +131,7 @@ The service publishes the names from `eia-contracts/asyncapi/event-catalog.yaml`
 | `PATCH .../tasks/{taskId}` to COMPLETE | `direct.claim.task-completed` |
 | `PATCH .../tasks/{taskId}` to CANCELLED or reopened | `direct.claim.task-updated` |
 | `POST .../notes` | `direct.claim.note-added` |
+| `POST /api/v1/claims/{claimId}/allocations` | `direct.claim.allocation-created` |
 
 The requested slice names `direct.claim.created`, `direct.claim.coverage-decided`, and
 `direct.claim.settlement-approved` are not in the catalog; the catalog names above are
@@ -133,7 +145,9 @@ members. Task payloads add `taskId`, `taskNumber`, `title`, `status` (the task s
 note payloads add `noteId`, `noteNumber`, `noteType`, `body`, and `author`; assignment
 payloads add `assignedAdjuster`, `assignedTeam`, `assignedAt`, and `assignedBy`. Task, note,
 and assignment writes bump the claim version, so their aggregate version is the post-write
-claim version plus one.
+claim version plus one. Allocation payloads add `policyId`, `policyYear`, `layer`,
+`allocationPct`, `allocatedAmount`, `totalPct`, and `totalAmount`; allocation writes also
+bump the claim version.
 
 Outbox rows are always written. HTTP dispatch and the Quartz job start only when
 `eia.outbox.enabled=true`; configure the subscriber endpoint with `EIA_OUTBOX_ENDPOINT`.

@@ -44,6 +44,10 @@ import java.util.UUID;
  * {@code eia-contracts/asyncapi}; the contracts repository is owned separately
  * and the gap is reported for catalog follow-up.</p>
  *
+ * <p>{@code direct.claim.allocation-created} is new in the allocation slice;
+ * like the task/note/assignment names it is not yet in the catalog and is
+ * reported as a catalog follow-up.</p>
+ *
  * <p>Claim rows start at version 0 for API compatibility, while the canonical
  * envelope requires {@code aggregateVersion >= 1}. The envelope version is
  * therefore the claim's row version after the change plus one, matching the
@@ -61,6 +65,7 @@ final class ClaimEvents {
     static final String TASK_COMPLETED = "direct.claim.task-completed";
     static final String TASK_UPDATED = "direct.claim.task-updated";
     static final String NOTE_ADDED = "direct.claim.note-added";
+    static final String ALLOCATION_CREATED = "direct.claim.allocation-created";
 
     private static final Book EVENT_BOOK = Book.DIRECT;
     private static final String VERTICAL = "direct";
@@ -246,6 +251,28 @@ final class ClaimEvents {
         data.put("author", note.author());
         data.put("createdAt", note.createdAt());
         return envelope(claim, NOTE_ADDED, claimVersion + 1L, now, data);
+    }
+
+    /**
+     * Claim allocation by policy year and layer. The create bumps the claim
+     * version, so {@code claimVersion} is the post-write claim version and the
+     * envelope aggregate version is one greater. The payload carries the claim
+     * identity plus the allocation and the claim's new allocation totals.
+     */
+    static EventEnvelope allocationCreated(Claim claim, ClaimAllocation allocation,
+                                           int claimVersion, BigDecimal totalPct,
+                                           BigDecimal totalAmount, Instant now) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("claimId", claim.id());
+        data.put("claimNumber", claim.claimNumber());
+        data.put("policyId", allocation.policyId());
+        data.put("policyYear", allocation.policyYear());
+        data.put("layer", allocation.layer());
+        data.put("allocationPct", money(allocation.allocationPct()));
+        data.put("allocatedAmount", money(allocation.allocatedAmount()));
+        data.put("totalPct", money(totalPct));
+        data.put("totalAmount", money(totalAmount));
+        return envelope(claim, ALLOCATION_CREATED, claimVersion + 1L, now, data);
     }
 
     private static void task(Map<String, Object> data, ClaimTask task) {

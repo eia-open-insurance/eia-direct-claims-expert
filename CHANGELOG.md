@@ -74,6 +74,22 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   - Claim list/get projections expose `assignedAdjuster`, `assignedTeam`, `assignedAt`, and
     `assignedBy`; controller and H2 integration tests cover assign/reassign, stale version,
     no-op, validation, tenant/book isolation, event payload, and rollback.
+- Claim allocations:
+  - Idempotent `claim_allocation` DDL (PostgreSQL and H2) with `id`, `tenant_id`,
+    `claim_id` FK, `policy_id`, `policy_year`, `layer VARCHAR(32)`,
+    `allocation_pct NUMERIC(9,6)`, `allocated_amount NUMERIC(19,4)`, `created_at`, a
+    `(tenant_id, claim_id)` index, and checks for `0 < allocation_pct <= 1` and
+    `allocated_amount >= 0`.
+  - `GET|POST /api/v1/claims/{claimId}/allocations`; the list is oldest first and returns
+    `{items, totalPct, totalAmount}`, and create returns 201.
+  - Claim/tenant scoping is 404, the policy must be the claim's own policy (400
+    `POLICY_MISMATCH`), the year must be 1900-2200, the layer at most 32 characters, the
+    percentage in (0, 1], and the percentages across a claim at most 1 (409
+    `ALLOCATION_EXCEEDS_100`). The allocated amount is not capped by the reserve.
+  - `direct.claim.allocation-created` is written to the outbox in the same transaction with
+    `claimId`, `claimNumber`, `policyId`, `policyYear`, `layer`, `allocationPct`,
+    `allocatedAmount`, `totalPct`, and `totalAmount`; allocation writes bump the claim
+    version, and integration tests cover the payload and rollback.
 
 ### Fixed
 

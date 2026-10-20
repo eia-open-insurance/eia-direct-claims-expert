@@ -119,6 +119,23 @@ CREATE TABLE IF NOT EXISTS claim_lien (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS claim_allocation (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    claim_id UUID NOT NULL REFERENCES claim (id) ON DELETE CASCADE,
+    policy_id UUID NOT NULL,
+    policy_year INTEGER NOT NULL,
+    layer VARCHAR(32) NOT NULL,
+    allocation_pct NUMERIC(9, 6) NOT NULL,
+    allocated_amount NUMERIC(19, 4) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT ck_claim_allocation_pct CHECK (allocation_pct > 0 AND allocation_pct <= 1),
+    CONSTRAINT ck_claim_allocation_amount CHECK (allocated_amount >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS ix_claim_allocation_claim
+    ON claim_allocation (tenant_id, claim_id);
+
 CREATE TABLE IF NOT EXISTS claim_task (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL,

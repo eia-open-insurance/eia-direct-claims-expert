@@ -293,6 +293,28 @@ CREATE TABLE IF NOT EXISTS claim_lien (
 CREATE INDEX IF NOT EXISTS ix_lien_claim ON claim_lien (tenant_id, claim_id);
 
 -- ---------------------------------------------------------------------------
+-- Claim allocation: the policy-year and layer split of a claim. The allocation
+-- percentages across one claim may not exceed 1; the allocated amount is a
+-- booking figure and is not capped by the current reserve.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS claim_allocation (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    claim_id UUID NOT NULL REFERENCES claim (id) ON DELETE CASCADE,
+    policy_id UUID NOT NULL,
+    policy_year INTEGER NOT NULL,
+    layer VARCHAR(32) NOT NULL,
+    allocation_pct NUMERIC(9,6) NOT NULL,
+    allocated_amount NUMERIC(19,4) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT ck_claim_allocation_pct CHECK (allocation_pct > 0 AND allocation_pct <= 1),
+    CONSTRAINT ck_claim_allocation_amount CHECK (allocated_amount >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS ix_claim_allocation_claim
+    ON claim_allocation (tenant_id, claim_id);
+
+-- ---------------------------------------------------------------------------
 -- Claim tasks and diary notes. Both are child records of the Claim aggregate,
 -- tenant- and claim-scoped, and append their domain event through the outbox in
 -- the same transaction. Notes are append-only: there is no update or delete.

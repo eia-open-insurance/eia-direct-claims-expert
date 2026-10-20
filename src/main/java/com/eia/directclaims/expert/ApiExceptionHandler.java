@@ -81,6 +81,26 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * An allocation must name the claim's own policy. The stable code is part
+     * of the allocation contract.
+     */
+    @ExceptionHandler(PolicyMismatchException.class)
+    public ResponseEntity<ApiError> policyMismatch(PolicyMismatchException ex,
+                                                   HttpServletRequest request) {
+        return error(HttpStatus.BAD_REQUEST, "POLICY_MISMATCH", ex.getMessage(), request, null);
+    }
+
+    /**
+     * The percentages across one claim may sum to at most 1. The stable code is
+     * part of the allocation contract.
+     */
+    @ExceptionHandler(AllocationExceedsHundredException.class)
+    public ResponseEntity<ApiError> allocationExceedsHundred(
+            AllocationExceedsHundredException ex, HttpServletRequest request) {
+        return error(HttpStatus.CONFLICT, "ALLOCATION_EXCEEDS_100", ex.getMessage(), request, null);
+    }
+
+    /**
      * An Idempotency-Key replay with a different canonical request body. The
      * stable code/category pair is part of the Direct Claims contract.
      */

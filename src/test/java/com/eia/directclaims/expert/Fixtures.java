@@ -23,6 +23,9 @@ final class Fixtures {
     static final UUID LIEN_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d38");
     static final UUID TASK_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d39");
     static final UUID NOTE_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d3a");
+    static final UUID ALLOCATION_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d3b");
+    static final UUID OTHER_POLICY_ID = UUID.fromString("55555555-5555-7555-8555-555555555555");
+    static final UUID OTHER_TENANT = UUID.fromString("99999999-9999-7999-8999-999999999999");
     static final LocalDate LOSS_DATE = LocalDate.of(2026, 3, 14);
     static final LocalDate REPORT_DATE = LocalDate.of(2026, 3, 18);
     static final LocalDate TASK_DUE_DATE = LocalDate.of(2026, 4, 15);
@@ -115,5 +118,10 @@ final class Fixtures {
     static ClaimNote note(String noteType, String body) {
         return new ClaimNote(NOTE_ID, TENANT, CLAIM_ID, "NTE-2026-0000001", noteType, body,
                 "adjuster@example.com", NOW);
+    }
+
+    static ClaimAllocation allocation(int policyYear, String layer, String pct, String amount) {
+        return new ClaimAllocation(ALLOCATION_ID, TENANT, CLAIM_ID, POLICY_ID, policyYear, layer,
+                new BigDecimal(pct), new BigDecimal(amount), NOW);
     }
 }
