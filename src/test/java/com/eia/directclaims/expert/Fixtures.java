@@ -82,8 +82,17 @@ final class Fixtures {
     }
 
     static LitigationMatter litigation() {
+        return litigation(null, null);
+    }
+
+    static LitigationMatter litigationWithDamages(BigDecimal damagesSought, String damagesCurrency) {
+        return litigation(damagesSought, damagesCurrency);
+    }
+
+    static LitigationMatter litigation(BigDecimal damagesSought, String damagesCurrency) {
         return new LitigationMatter(LITIGATION_ID, TENANT, CLAIM_ID, "DEFENSE", "US-OH", OTHER_PARTY_ID,
-                LocalDate.of(2026, 2, 1), LocalDate.of(2026, 9, 1), "ACTIVE", "CV-2026-001", 1, NOW, NOW);
+                LocalDate.of(2026, 2, 1), LocalDate.of(2026, 9, 1), "ACTIVE", "CV-2026-001",
+                damagesSought, damagesCurrency, 1, NOW, NOW);
     }
 
     static Settlement settlement(String status) {

@@ -185,12 +185,22 @@ public class ClaimRepository {
         return expectedVersion + 1;
     }
 
-    public void markLitigation(UUID tenantId, UUID id, Instant now) {
-        jdbc.update("""
+    /**
+     * Flags the claim as in litigation and bumps its row version. The caller
+     * passes the version it observed so a concurrent claim change is a 409 and
+     * no litigation row or event is written. Returns the post-change version.
+     */
+    public int markLitigation(UUID tenantId, UUID id, int expectedVersion, Instant now) {
+        int changed = jdbc.update("""
                 UPDATE claim
-                   SET litigation_flag = TRUE, updated_at = ?
-                 WHERE tenant_id = ? AND id = ? AND business_book = 'DIRECT'
-                """, Timestamp.from(now), tenantId, id);
+                   SET litigation_flag = TRUE, version = version + 1, updated_at = ?
+                 WHERE tenant_id = ? AND id = ? AND version = ? AND business_book = 'DIRECT'
+                """, Timestamp.from(now), tenantId, id, expectedVersion);
+        if (changed == 0) {
+            throw new ClaimConflictException(
+                    "Claim " + id + " was modified concurrently or version " + expectedVersion + " is stale");
+        }
+        return expectedVersion + 1;
     }
 
     private static Instant instant(ResultSet rs, String column) throws SQLException {

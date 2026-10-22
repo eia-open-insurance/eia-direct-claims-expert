@@ -193,6 +193,8 @@ CREATE TABLE IF NOT EXISTS claim_litigation (
     trial_date DATE,
     status VARCHAR(16) NOT NULL,
     case_number VARCHAR(64),
+    damages_sought NUMERIC(19,4),
+    damages_currency CHAR(3),
     version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
@@ -200,10 +202,23 @@ CREATE TABLE IF NOT EXISTS claim_litigation (
         'DEFENSE', 'COVERAGE', 'APPEAL', 'BANKRUPTCY', 'REGULATORY', 'TRANSACTIONAL')),
     CONSTRAINT ck_litigation_status CHECK (status IN (
         'ACTIVE', 'STAYED', 'DISMISSED', 'SETTLED', 'JUDGMENT', 'ON_APPEAL', 'CLOSED')),
-    CONSTRAINT ck_litigation_dates CHECK (trial_date IS NULL OR trial_date >= filing_date)
+    CONSTRAINT ck_litigation_dates CHECK (trial_date IS NULL OR trial_date >= filing_date),
+    CONSTRAINT ck_litigation_damages CHECK (
+        (damages_sought IS NULL AND damages_currency IS NULL)
+        OR (damages_sought IS NOT NULL AND damages_sought > 0 AND damages_currency IS NOT NULL))
 );
 
 CREATE INDEX IF NOT EXISTS ix_litigation_claim ON claim_litigation (tenant_id, claim_id);
+
+-- Damages are additive and nullable for existing matters. Both columns are
+-- present or both are null, and a recorded amount is strictly positive.
+ALTER TABLE claim_litigation ADD COLUMN IF NOT EXISTS damages_sought NUMERIC(19,4);
+ALTER TABLE claim_litigation ADD COLUMN IF NOT EXISTS damages_currency CHAR(3);
+ALTER TABLE claim_litigation DROP CONSTRAINT IF EXISTS ck_litigation_damages;
+ALTER TABLE claim_litigation ADD CONSTRAINT ck_litigation_damages CHECK (
+    (damages_sought IS NULL AND damages_currency IS NULL)
+    OR (damages_sought IS NOT NULL AND damages_sought > 0 AND damages_currency IS NOT NULL)
+);
 
 -- ---------------------------------------------------------------------------
 -- Settlement (SPEC 11.4.4 claim_settlement)

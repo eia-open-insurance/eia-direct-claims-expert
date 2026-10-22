@@ -127,6 +127,20 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   mandatory, the two optional filters combine, and results remain newest first by
   `created_at` with `claim_number` as the tie-break. Repository, service, and controller
   tests cover the filter, tenant isolation, the unchanged unfiltered list, and ordering.
+- Litigation damages:
+  - Additive, idempotent `claim_litigation` columns `damages_sought NUMERIC(19,4)` and
+    `damages_currency CHAR(3)` in the PostgreSQL and H2 schemas, with a both-or-neither and
+    strictly-positive check.
+  - `POST|PATCH .../litigation` accept optional `damagesSought` and `damagesCurrency`.
+    Create requires both or neither; PATCH omitting both keeps the stored pair. A present
+    amount must be greater than zero and the currency is a three-letter ISO code.
+  - The litigation DTO exposes `damagesSought` (decimal string) and `damagesCurrency`.
+  - `direct.claim.litigation-created` (new name; catalog follow-up) and
+    `direct.claim.litigation-updated` (previously planned) are written to the outbox in the
+    same transaction as the matter and the claim version bump, carrying the matter and
+    damages when present. Service, controller, and H2 integration tests cover create/update
+    with and without damages, pair/positive validation, tenant isolation, DDL checks, and
+    payloads.
 
 ### Fixed
 

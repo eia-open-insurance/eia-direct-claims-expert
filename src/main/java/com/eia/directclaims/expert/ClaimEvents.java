@@ -53,6 +53,12 @@ import java.util.UUID;
  * follow-up. On an unlink the event still records the state change, with a null
  * {@code paymentId} and {@code linkedAt}.</p>
  *
+ * <p>{@code direct.claim.litigation-updated} was declared as planned in
+ * {@code eia-contracts/asyncapi} and is now published, together with the new
+ * {@code direct.claim.litigation-created} name (a catalog follow-up, like the
+ * allocation and note names). Both carry the litigation matter and add
+ * {@code damagesSought}/{@code damagesCurrency} only when damages are recorded.</p>
+ *
  * <p>Claim rows start at version 0 for API compatibility, while the canonical
  * envelope requires {@code aggregateVersion >= 1}. The envelope version is
  * therefore the claim's row version after the change plus one, matching the
@@ -72,6 +78,8 @@ final class ClaimEvents {
     static final String TASK_UPDATED = "direct.claim.task-updated";
     static final String NOTE_ADDED = "direct.claim.note-added";
     static final String ALLOCATION_CREATED = "direct.claim.allocation-created";
+    static final String LITIGATION_CREATED = "direct.claim.litigation-created";
+    static final String LITIGATION_UPDATED = "direct.claim.litigation-updated";
 
     private static final Book EVENT_BOOK = Book.DIRECT;
     private static final String VERTICAL = "direct";
@@ -295,6 +303,51 @@ final class ClaimEvents {
         data.put("totalPct", money(totalPct));
         data.put("totalAmount", money(totalAmount));
         return envelope(claim, ALLOCATION_CREATED, claimVersion + 1L, now, data);
+    }
+
+    /**
+     * Litigation matter recorded. The claim row version has already been bumped
+     * by {@link ClaimRepository#markLitigation}, so {@code claimVersion} is the
+     * post-write claim version and the envelope aggregate version is one
+     * greater. Optional matter fields, including damages, are omitted when null.
+     */
+    static EventEnvelope litigationCreated(Claim claim, LitigationMatter matter,
+                                           int claimVersion, Instant now) {
+        Map<String, Object> data = identity(claim, claimVersion);
+        litigation(data, matter);
+        return envelope(claim, LITIGATION_CREATED, claimVersion + 1L, now, data);
+    }
+
+    /**
+     * Litigation matter changed. The caller bumps the claim version in the same
+     * transaction so the claim event stream stays monotonic; the litigation
+     * matter's own version is carried in the payload.
+     */
+    static EventEnvelope litigationUpdated(Claim claim, LitigationMatter matter,
+                                           int claimVersion, Instant now) {
+        Map<String, Object> data = identity(claim, claimVersion);
+        litigation(data, matter);
+        return envelope(claim, LITIGATION_UPDATED, claimVersion + 1L, now, data);
+    }
+
+    private static void litigation(Map<String, Object> data, LitigationMatter matter) {
+        data.put("litigationId", matter.id());
+        data.put("matterType", matter.matterType());
+        data.put("jurisdiction", matter.jurisdiction());
+        data.put("counselPartyId", matter.counselPartyId());
+        data.put("filingDate", matter.filingDate());
+        if (matter.trialDate() != null) {
+            data.put("trialDate", matter.trialDate());
+        }
+        data.put("litigationStatus", matter.status());
+        if (matter.caseNumber() != null) {
+            data.put("caseNumber", matter.caseNumber());
+        }
+        if (matter.damagesSought() != null) {
+            data.put("damagesSought", money(matter.damagesSought()));
+            data.put("damagesCurrency", matter.damagesCurrency());
+        }
+        data.put("litigationVersion", matter.version());
     }
 
     private static void task(Map<String, Object> data, ClaimTask task) {

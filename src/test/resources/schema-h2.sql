@@ -81,6 +81,42 @@ CREATE TABLE IF NOT EXISTS claim_coverage_decision (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS claim_litigation (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    claim_id UUID NOT NULL REFERENCES claim (id) ON DELETE CASCADE,
+    matter_type VARCHAR(16) NOT NULL,
+    jurisdiction VARCHAR(120) NOT NULL,
+    counsel_party_id UUID NOT NULL,
+    filing_date DATE NOT NULL,
+    trial_date DATE,
+    status VARCHAR(16) NOT NULL,
+    case_number VARCHAR(64),
+    damages_sought NUMERIC(19, 4),
+    damages_currency CHAR(3),
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT ck_litigation_matter_type CHECK (matter_type IN (
+        'DEFENSE', 'COVERAGE', 'APPEAL', 'BANKRUPTCY', 'REGULATORY', 'TRANSACTIONAL')),
+    CONSTRAINT ck_litigation_status CHECK (status IN (
+        'ACTIVE', 'STAYED', 'DISMISSED', 'SETTLED', 'JUDGMENT', 'ON_APPEAL', 'CLOSED')),
+    CONSTRAINT ck_litigation_dates CHECK (trial_date IS NULL OR trial_date >= filing_date),
+    CONSTRAINT ck_litigation_damages CHECK (
+        (damages_sought IS NULL AND damages_currency IS NULL)
+        OR (damages_sought IS NOT NULL AND damages_sought > 0 AND damages_currency IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS ix_litigation_claim ON claim_litigation (tenant_id, claim_id);
+
+ALTER TABLE claim_litigation ADD COLUMN IF NOT EXISTS damages_sought NUMERIC(19, 4);
+ALTER TABLE claim_litigation ADD COLUMN IF NOT EXISTS damages_currency CHAR(3);
+ALTER TABLE claim_litigation DROP CONSTRAINT IF EXISTS ck_litigation_damages;
+ALTER TABLE claim_litigation ADD CONSTRAINT ck_litigation_damages CHECK (
+    (damages_sought IS NULL AND damages_currency IS NULL)
+    OR (damages_sought IS NOT NULL AND damages_sought > 0 AND damages_currency IS NOT NULL)
+);
+
 CREATE TABLE IF NOT EXISTS claim_settlement (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL,

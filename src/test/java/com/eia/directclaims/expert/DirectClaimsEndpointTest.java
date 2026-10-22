@@ -1,12 +1,14 @@
 package com.eia.directclaims.expert;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import static com.eia.directclaims.expert.Fixtures.CLAIM_ID;
@@ -24,12 +26,15 @@ import static com.eia.directclaims.expert.Fixtures.exposure;
 import static com.eia.directclaims.expert.Fixtures.injury;
 import static com.eia.directclaims.expert.Fixtures.lien;
 import static com.eia.directclaims.expert.Fixtures.litigation;
+import static com.eia.directclaims.expert.Fixtures.litigationWithDamages;
 import static com.eia.directclaims.expert.Fixtures.recovery;
 import static com.eia.directclaims.expert.Fixtures.reserve;
 import static com.eia.directclaims.expert.Fixtures.settlement;
 import static org.hamcrest.Matchers.nullValue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -323,6 +328,57 @@ class DirectClaimsEndpointTest {
                         .content("{\"status\": \"STAYED\", \"expectedVersion\": 1}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"));
+    }
+
+    @Test
+    void recordsALitigationMatterWithDamages() throws Exception {
+        when(litigationService.add(eq(TENANT), eq(CLAIM_ID), any(LitigationRequest.class)))
+                .thenReturn(litigationWithDamages(new BigDecimal("275000.0000"), "USD"));
+
+        mvc.perform(post(BASE + "/litigation")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", "DIRECT")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "matterType": "DEFENSE",
+                                  "jurisdiction": "US-OH",
+                                  "counselPartyId": "44444444-4444-7444-8444-444444444444",
+                                  "filingDate": "2026-02-01",
+                                  "status": "ACTIVE",
+                                  "damagesSought": 275000.00,
+                                  "damagesCurrency": "USD"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.damagesSought").value("275000.0000"))
+                .andExpect(jsonPath("$.damagesCurrency").value("USD"));
+    }
+
+    @Test
+    void updatesALitigationMatterDamages() throws Exception {
+        when(litigationService.update(eq(TENANT), eq(CLAIM_ID), eq(LITIGATION_ID), any(LitigationRequest.class)))
+                .thenReturn(litigationWithDamages(new BigDecimal("325000.5000"), "USD"));
+
+        mvc.perform(patch(BASE + "/litigation/" + LITIGATION_ID)
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", "DIRECT")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "damagesSought": "325000.50",
+                                  "damagesCurrency": "USD",
+                                  "expectedVersion": 1
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.damagesSought").value("325000.5000"))
+                .andExpect(jsonPath("$.damagesCurrency").value("USD"));
+
+        ArgumentCaptor<LitigationRequest> captor = ArgumentCaptor.forClass(LitigationRequest.class);
+        verify(litigationService).update(eq(TENANT), eq(CLAIM_ID), eq(LITIGATION_ID), captor.capture());
+        assertEquals(0, captor.getValue().damagesSought().compareTo(new BigDecimal("325000.50")));
+        assertEquals("USD", captor.getValue().damagesCurrency());
     }
 
     // ------------------------------------------------------------------ settlements
