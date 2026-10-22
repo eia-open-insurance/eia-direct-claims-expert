@@ -12,19 +12,27 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
+import java.util.UUID;
 
 import static com.eia.directclaims.expert.Fixtures.CLAIM_ID;
 import static com.eia.directclaims.expert.Fixtures.OTHER_PARTY_ID;
+import static com.eia.directclaims.expert.Fixtures.OTHER_TENANT;
+import static com.eia.directclaims.expert.Fixtures.PAYMENT_ID;
 import static com.eia.directclaims.expert.Fixtures.SETTLEMENT_ID;
 import static com.eia.directclaims.expert.Fixtures.TENANT;
 import static com.eia.directclaims.expert.Fixtures.claim;
 import static com.eia.directclaims.expert.Fixtures.coverage;
 import static com.eia.directclaims.expert.Fixtures.settlement;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -182,7 +190,7 @@ class SettlementServiceTest {
                 .thenReturn(Optional.of(new Settlement(SETTLEMENT_ID, TENANT, CLAIM_ID,
                         "SET-2026-0000001", new BigDecimal("60000.0000"), "USD", "LUMP_SUM", "FULL",
                         "Claims Committee", null, null, "AUTHORIZED", OTHER_PARTY_ID, Fixtures.NOW,
-                        null, 1, Fixtures.NOW, Fixtures.NOW)));
+                        null, null, null, 1, Fixtures.NOW, Fixtures.NOW)));
 
         ClaimValidationException error = assertThrows(ClaimValidationException.class,
                 () -> service.execute(TENANT, CLAIM_ID, SETTLEMENT_ID,
@@ -215,6 +223,100 @@ class SettlementServiceTest {
                 new SettlementExecutionRequest(OTHER_PARTY_ID, "Wire funds", 9)));
     }
 
+    @Test
+    void linksAPaymentOnAnAuthorizedSettlement() {
+        claimExists();
+        when(repository.findById(TENANT, CLAIM_ID, SETTLEMENT_ID))
+                .thenReturn(Optional.of(settlement("AUTHORIZED")));
+        when(claimRepository.bumpVersion(eq(TENANT), eq(CLAIM_ID), eq(0), any(Instant.class)))
+                .thenReturn(1);
+        when(repository.updatePayment(eq(TENANT), eq(CLAIM_ID), eq(SETTLEMENT_ID), eq(PAYMENT_ID),
+                any(Instant.class), eq(1), any(Instant.class)))
+                .thenReturn(settlement("AUTHORIZED", PAYMENT_ID, Fixtures.NOW, 2));
+
+        Settlement linked = service.updatePayment(TENANT, CLAIM_ID, SETTLEMENT_ID,
+                paymentRequest(PAYMENT_ID));
+
+        assertEquals(PAYMENT_ID, linked.paymentId());
+        assertNotNull(linked.paymentLinkedAt());
+        assertEquals(2, linked.version());
+        verify(outbox).insert(any());
+    }
+
+    @Test
+    void unlinksThePaymentOnAnExecutedSettlement() {
+        claimExists();
+        when(repository.findById(TENANT, CLAIM_ID, SETTLEMENT_ID)).thenReturn(Optional.of(
+                settlement("EXECUTED", PAYMENT_ID, Fixtures.NOW, 2)));
+        when(claimRepository.bumpVersion(eq(TENANT), eq(CLAIM_ID), eq(0), any(Instant.class)))
+                .thenReturn(1);
+        when(repository.updatePayment(eq(TENANT), eq(CLAIM_ID), eq(SETTLEMENT_ID), isNull(),
+                isNull(), eq(2), any(Instant.class)))
+                .thenReturn(settlement("EXECUTED", null, null, 3));
+
+        Settlement unlinked = service.updatePayment(TENANT, CLAIM_ID, SETTLEMENT_ID,
+                paymentRequest(null));
+
+        assertNull(unlinked.paymentId());
+        assertNull(unlinked.paymentLinkedAt());
+        assertEquals(3, unlinked.version());
+        verify(outbox).insert(any());
+    }
+
+    @Test
+    void refusesToLinkAPaymentOnAProposedSettlement() {
+        claimExists();
+        when(repository.findById(TENANT, CLAIM_ID, SETTLEMENT_ID))
+                .thenReturn(Optional.of(settlement("PROPOSED")));
+
+        SettlementNotLinkableException error = assertThrows(SettlementNotLinkableException.class,
+                () -> service.updatePayment(TENANT, CLAIM_ID, SETTLEMENT_ID,
+                        paymentRequest(PAYMENT_ID)));
+
+        assertTrue(error.getMessage().contains("PROPOSED"));
+        verify(repository, never()).updatePayment(any(), any(), any(), any(), any(), anyInt(), any());
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void refusesToLinkAPaymentOnARejectedSettlement() {
+        claimExists();
+        when(repository.findById(TENANT, CLAIM_ID, SETTLEMENT_ID))
+                .thenReturn(Optional.of(settlement("REJECTED")));
+
+        assertThrows(SettlementNotLinkableException.class,
+                () -> service.updatePayment(TENANT, CLAIM_ID, SETTLEMENT_ID,
+                        paymentRequest(PAYMENT_ID)));
+
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void paymentLinkIsTenantScoped() {
+        when(claimRepository.findById(OTHER_TENANT, CLAIM_ID)).thenReturn(Optional.empty());
+
+        assertThrows(ClaimNotFoundException.class,
+                () -> service.updatePayment(OTHER_TENANT, CLAIM_ID, SETTLEMENT_ID,
+                        paymentRequest(PAYMENT_ID)));
+
+        verify(repository, never()).findById(any(), any(), any());
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void repeatingTheCurrentPaymentIsANoOp() {
+        claimExists();
+        Settlement current = settlement("AUTHORIZED", PAYMENT_ID, Fixtures.NOW, 2);
+        when(repository.findById(TENANT, CLAIM_ID, SETTLEMENT_ID)).thenReturn(Optional.of(current));
+
+        Settlement unchanged = service.updatePayment(TENANT, CLAIM_ID, SETTLEMENT_ID,
+                paymentRequest(PAYMENT_ID));
+
+        assertEquals(current, unchanged);
+        verify(repository, never()).updatePayment(any(), any(), any(), any(), any(), anyInt(), any());
+        verifyNoInteractions(outbox);
+    }
+
     private void claimExists() {
         claimExistsWithAuthority(new BigDecimal("500000.0000"));
     }
@@ -231,5 +333,9 @@ class SettlementServiceTest {
 
     private static SettlementApprovalRequest approval(String authority, int version) {
         return new SettlementApprovalRequest(authority, OTHER_PARTY_ID, version);
+    }
+
+    private static SettlementPaymentRequest paymentRequest(UUID paymentId) {
+        return new SettlementPaymentRequest(paymentId);
     }
 }

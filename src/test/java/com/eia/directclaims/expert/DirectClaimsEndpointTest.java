@@ -14,6 +14,8 @@ import static com.eia.directclaims.expert.Fixtures.EXPOSURE_ID;
 import static com.eia.directclaims.expert.Fixtures.INJURY_ID;
 import static com.eia.directclaims.expert.Fixtures.LIEN_ID;
 import static com.eia.directclaims.expert.Fixtures.LITIGATION_ID;
+import static com.eia.directclaims.expert.Fixtures.NOW;
+import static com.eia.directclaims.expert.Fixtures.PAYMENT_ID;
 import static com.eia.directclaims.expert.Fixtures.RECOVERY_ID;
 import static com.eia.directclaims.expert.Fixtures.SETTLEMENT_ID;
 import static com.eia.directclaims.expert.Fixtures.TENANT;
@@ -25,6 +27,7 @@ import static com.eia.directclaims.expert.Fixtures.litigation;
 import static com.eia.directclaims.expert.Fixtures.recovery;
 import static com.eia.directclaims.expert.Fixtures.reserve;
 import static com.eia.directclaims.expert.Fixtures.settlement;
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -47,6 +50,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 class DirectClaimsEndpointTest {
     private static final String BASE = "/internal/v1/claims/" + CLAIM_ID;
+    private static final String PUBLIC_BASE = "/api/v1/claims/" + CLAIM_ID;
     private static final String TENANT_PARAM = TENANT.toString();
 
     @Autowired
@@ -392,6 +396,53 @@ class DirectClaimsEndpointTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("EXECUTED"));
+    }
+
+    @Test
+    void linksASettlementPaymentOnThePublicRoute() throws Exception {
+        when(settlementService.updatePayment(eq(TENANT), eq(CLAIM_ID), eq(SETTLEMENT_ID),
+                any(SettlementPaymentRequest.class)))
+                .thenReturn(settlement("AUTHORIZED", PAYMENT_ID, NOW, 2));
+
+        mvc.perform(patch(PUBLIC_BASE + "/settlements/" + SETTLEMENT_ID + "/payment")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", "DIRECT")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"paymentId\": \"" + PAYMENT_ID + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paymentId").value(PAYMENT_ID.toString()))
+                .andExpect(jsonPath("$.paymentLinkedAt").isNotEmpty());
+    }
+
+    @Test
+    void unlinksASettlementPayment() throws Exception {
+        when(settlementService.updatePayment(eq(TENANT), eq(CLAIM_ID), eq(SETTLEMENT_ID),
+                any(SettlementPaymentRequest.class)))
+                .thenReturn(settlement("AUTHORIZED", null, null, 3));
+
+        mvc.perform(patch(BASE + "/settlements/" + SETTLEMENT_ID + "/payment")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", "DIRECT")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"paymentId\": null}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paymentId").value(nullValue()))
+                .andExpect(jsonPath("$.paymentLinkedAt").value(nullValue()));
+    }
+
+    @Test
+    void rejectsAPaymentLinkOnAnUnlinkableSettlement() throws Exception {
+        when(settlementService.updatePayment(eq(TENANT), eq(CLAIM_ID), eq(SETTLEMENT_ID),
+                any(SettlementPaymentRequest.class)))
+                .thenThrow(new SettlementNotLinkableException("Settlement is PROPOSED"));
+
+        mvc.perform(patch(BASE + "/settlements/" + SETTLEMENT_ID + "/payment")
+                        .header("X-EIA-Tenant", TENANT)
+                        .header("X-EIA-Book", "DIRECT")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"paymentId\": \"" + PAYMENT_ID + "\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("SETTLEMENT_NOT_LINKABLE"));
     }
 
     // ------------------------------------------------------------------ recoveries

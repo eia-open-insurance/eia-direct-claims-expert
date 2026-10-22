@@ -11,6 +11,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -136,6 +137,43 @@ public class SettlementService {
         }
         return repository.execute(tenantId, claimId, settlementId, release, instructions, expectedVersion,
                 Instant.now(clock));
+    }
+
+    /**
+     * Links or unlinks the Payment record that pays a settlement. Only an
+     * AUTHORIZED or EXECUTED settlement is linkable; a PROPOSED or REJECTED
+     * settlement is 409 {@code SETTLEMENT_NOT_LINKABLE}. A non-null payment id
+     * stores the id and the current instant as {@code paymentLinkedAt}; a null
+     * payment id clears both. Repeating the current link is an idempotent no-op.
+     *
+     * <p>A real change bumps the claim version so the
+     * {@code direct.claim.settlement-payment-linked} event stays monotonic with
+     * the rest of the claim stream, and bumps the settlement version. Both
+     * writes and the event commit in one transaction.</p>
+     */
+    @Transactional
+    public Settlement updatePayment(UUID tenantId,
+                                    UUID claimId,
+                                    UUID settlementId,
+                                    SettlementPaymentRequest request) {
+        Claim claim = claims.require(tenantId, claimId);
+        Settlement settlement = repository.findById(tenantId, claimId, settlementId)
+                .orElseThrow(() -> RecordNotFoundException.of("Settlement", settlementId));
+        if (!"AUTHORIZED".equals(settlement.status()) && !"EXECUTED".equals(settlement.status())) {
+            throw new SettlementNotLinkableException("Settlement " + settlementId + " is "
+                    + settlement.status() + "; only an AUTHORIZED or EXECUTED settlement can link a payment");
+        }
+        UUID paymentId = request.paymentId();
+        if (Objects.equals(settlement.paymentId(), paymentId)) {
+            return settlement;
+        }
+        Instant now = Instant.now(clock);
+        int claimVersion = claimRepository.bumpVersion(tenantId, claimId, claim.version(), now);
+        Settlement linked = repository.updatePayment(tenantId, claimId, settlementId, paymentId,
+                paymentId == null ? null : now, settlement.version(), now);
+        outbox.insert(OutboxEvent.fromEnvelope(
+                ClaimEvents.settlementPaymentLinked(claim, linked, claimVersion, now)));
+        return linked;
     }
 
     /**

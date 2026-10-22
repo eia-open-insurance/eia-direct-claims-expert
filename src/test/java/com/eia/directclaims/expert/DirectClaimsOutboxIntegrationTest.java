@@ -32,6 +32,8 @@ class DirectClaimsOutboxIntegrationTest {
     private static final UUID CLAIMANT_ID = UUID.fromString("33333333-3333-7333-8333-333333333333");
     private static final UUID REVIEWER_ID = UUID.fromString("44444444-4444-7444-8444-444444444444");
     private static final UUID APPROVER_ID = UUID.fromString("55555555-5555-7555-8555-555555555555");
+    private static final UUID PAYMENT_ID = UUID.fromString("0192f3a4-2b7e-7d1f-a9c4-3e8b5f0c9d3c");
+    private static final UUID OTHER_TENANT = UUID.fromString("99999999-9999-7999-8999-999999999999");
 
     @Autowired
     private ClaimService claimService;
@@ -246,6 +248,126 @@ class DirectClaimsOutboxIntegrationTest {
         assertThat(((Number) settlement.get("version")).intValue()).isEqualTo(1);
         assertThat(count("outbox_event")).isEqualTo(2);
         assertThat(countEvents(claim.id(), "direct.claim.settlement-authorized")).isZero();
+    }
+
+    @Test
+    void settlementPaymentLinkWritesLinkedEventAndBumpsBothVersions() {
+        Claim claim = createClaim(new BigDecimal("0.00"));
+        coverageService.decide(TENANT, claim.id(), coverageRequest("COVERED"));
+        Settlement proposed = settlementService.propose(TENANT, claim.id(), settlementRequest());
+        Settlement authorized = settlementService.approve(TENANT, claim.id(), proposed.id(),
+                new SettlementApprovalRequest("Claims Committee", APPROVER_ID, proposed.version()));
+
+        Settlement linked = settlementService.updatePayment(TENANT, claim.id(), authorized.id(),
+                new SettlementPaymentRequest(PAYMENT_ID));
+
+        assertThat(linked.paymentId()).isEqualTo(PAYMENT_ID);
+        assertThat(linked.paymentLinkedAt()).isNotNull();
+        assertThat(linked.version()).isEqualTo(authorized.version() + 1);
+        assertThat(claimVersion(claim.id())).isEqualTo(authorized.version() + 1);
+
+        Map<String, Object> event = lastEvent(claim.id());
+        assertThat(event.get("event_type")).isEqualTo("direct.claim.settlement-payment-linked");
+        assertThat(aggregateVersion(event)).isEqualTo(4L);
+
+        Map<String, Object> payload = payload(event);
+        assertThat(payload.get("claimId")).isEqualTo(claim.id().toString());
+        assertThat(payload.get("version")).isEqualTo(3);
+        assertThat(payload.get("settlementId")).isEqualTo(linked.id().toString());
+        assertThat(payload.get("settlementNumber")).isEqualTo(linked.settlementNumber());
+        assertThat(payload.get("paymentId")).isEqualTo(PAYMENT_ID.toString());
+        assertThat(payload.get("linkedAt")).isEqualTo(linked.paymentLinkedAt().toString());
+    }
+
+    @Test
+    void settlementPaymentUnlinkClearsTheLinkAndWritesAnotherEvent() {
+        Claim claim = createClaim(new BigDecimal("0.00"));
+        coverageService.decide(TENANT, claim.id(), coverageRequest("COVERED"));
+        Settlement proposed = settlementService.propose(TENANT, claim.id(), settlementRequest());
+        Settlement authorized = settlementService.approve(TENANT, claim.id(), proposed.id(),
+                new SettlementApprovalRequest("Claims Committee", APPROVER_ID, proposed.version()));
+        Settlement linked = settlementService.updatePayment(TENANT, claim.id(), authorized.id(),
+                new SettlementPaymentRequest(PAYMENT_ID));
+
+        Settlement unlinked = settlementService.updatePayment(TENANT, claim.id(), linked.id(),
+                new SettlementPaymentRequest(null));
+
+        assertThat(unlinked.paymentId()).isNull();
+        assertThat(unlinked.paymentLinkedAt()).isNull();
+        assertThat(unlinked.version()).isEqualTo(linked.version() + 1);
+        assertThat(claimVersion(claim.id())).isEqualTo(4);
+
+        Map<String, Object> event = lastEvent(claim.id());
+        assertThat(event.get("event_type")).isEqualTo("direct.claim.settlement-payment-linked");
+        assertThat(aggregateVersion(event)).isEqualTo(5L);
+        Map<String, Object> payload = payload(event);
+        assertThat(payload.get("settlementId")).isEqualTo(unlinked.id().toString());
+        assertThat(payload).doesNotContainKeys("paymentId", "linkedAt");
+
+        Map<String, Object> settlement = jdbc.queryForMap("""
+                SELECT payment_id, payment_linked_at FROM claim_settlement WHERE id = ?
+                """, unlinked.id());
+        assertThat(settlement.get("payment_id")).isNull();
+        assertThat(settlement.get("payment_linked_at")).isNull();
+    }
+
+    @Test
+    void settlementPaymentLinkRejectsANonLinkableSettlement() {
+        Claim claim = createClaim(new BigDecimal("0.00"));
+        coverageService.decide(TENANT, claim.id(), coverageRequest("COVERED"));
+        Settlement proposed = settlementService.propose(TENANT, claim.id(), settlementRequest());
+
+        assertThatThrownBy(() -> settlementService.updatePayment(TENANT, claim.id(), proposed.id(),
+                new SettlementPaymentRequest(PAYMENT_ID)))
+                .isInstanceOf(SettlementNotLinkableException.class)
+                .hasMessageContaining("PROPOSED");
+
+        assertThat(claimVersion(claim.id())).isEqualTo(1);
+        assertThat(countEvents(claim.id(), "direct.claim.settlement-payment-linked")).isZero();
+        Map<String, Object> settlement = jdbc.queryForMap("""
+                SELECT payment_id, version FROM claim_settlement WHERE id = ?
+                """, proposed.id());
+        assertThat(settlement.get("payment_id")).isNull();
+        assertThat(((Number) settlement.get("version")).intValue()).isEqualTo(1);
+    }
+
+    @Test
+    void settlementPaymentLinkIsTenantScoped() {
+        Claim claim = createClaim(new BigDecimal("0.00"));
+        coverageService.decide(TENANT, claim.id(), coverageRequest("COVERED"));
+        Settlement proposed = settlementService.propose(TENANT, claim.id(), settlementRequest());
+        Settlement authorized = settlementService.approve(TENANT, claim.id(), proposed.id(),
+                new SettlementApprovalRequest("Claims Committee", APPROVER_ID, proposed.version()));
+
+        assertThatThrownBy(() -> settlementService.updatePayment(OTHER_TENANT, claim.id(),
+                authorized.id(), new SettlementPaymentRequest(PAYMENT_ID)))
+                .isInstanceOf(ClaimNotFoundException.class);
+
+        assertThat(claimVersion(claim.id())).isEqualTo(2);
+        assertThat(countEvents(claim.id(), "direct.claim.settlement-payment-linked")).isZero();
+        Map<String, Object> settlement = jdbc.queryForMap("""
+                SELECT payment_id, version FROM claim_settlement WHERE id = ?
+                """, authorized.id());
+        assertThat(settlement.get("payment_id")).isNull();
+        assertThat(((Number) settlement.get("version")).intValue()).isEqualTo(2);
+    }
+
+    @Test
+    void settlementPaymentLinkIsIdempotentForTheSamePayment() {
+        Claim claim = createClaim(new BigDecimal("0.00"));
+        coverageService.decide(TENANT, claim.id(), coverageRequest("COVERED"));
+        Settlement proposed = settlementService.propose(TENANT, claim.id(), settlementRequest());
+        Settlement authorized = settlementService.approve(TENANT, claim.id(), proposed.id(),
+                new SettlementApprovalRequest("Claims Committee", APPROVER_ID, proposed.version()));
+        Settlement linked = settlementService.updatePayment(TENANT, claim.id(), authorized.id(),
+                new SettlementPaymentRequest(PAYMENT_ID));
+
+        Settlement repeated = settlementService.updatePayment(TENANT, claim.id(), linked.id(),
+                new SettlementPaymentRequest(PAYMENT_ID));
+
+        assertThat(repeated).isEqualTo(linked);
+        assertThat(claimVersion(claim.id())).isEqualTo(3);
+        assertThat(countEvents(claim.id(), "direct.claim.settlement-payment-linked")).isEqualTo(1);
     }
 
     // ------------------------------------------------------------------- close

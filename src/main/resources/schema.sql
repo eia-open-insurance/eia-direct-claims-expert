@@ -224,6 +224,8 @@ CREATE TABLE IF NOT EXISTS claim_settlement (
     authorized_by UUID,
     authorized_at TIMESTAMPTZ,
     executed_at TIMESTAMPTZ,
+    payment_id UUID,
+    payment_linked_at TIMESTAMPTZ,
     version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
@@ -235,6 +237,12 @@ CREATE TABLE IF NOT EXISTS claim_settlement (
     CONSTRAINT ck_settlement_release_scope CHECK (
         release_scope IS NULL OR release_scope IN ('FULL', 'PARTIAL', 'CLAIMANT_SPECIFIC', 'POLICY_YEAR'))
 );
+
+-- Payment linkage is additive. Payment owns the payment record; Direct Claims
+-- stores only the external payment id and when it was linked, so an unlink can
+-- clear both without touching the Payment service.
+ALTER TABLE claim_settlement ADD COLUMN IF NOT EXISTS payment_id UUID;
+ALTER TABLE claim_settlement ADD COLUMN IF NOT EXISTS payment_linked_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS ix_settlement_claim ON claim_settlement (tenant_id, claim_id);
 

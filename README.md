@@ -52,7 +52,8 @@ Internal endpoints (all require `X-EIA-Book: DIRECT`; any other book returns 404
 - `GET|POST /internal/v1/claims/{id}/coverage`
 - `GET|POST /internal/v1/claims/{id}/litigation`, `PATCH .../litigation/{litigationId}`
 - `GET|POST /internal/v1/claims/{id}/settlements`, `POST .../settlements/{settlementId}/approve`,
-  `POST .../settlements/{settlementId}/execute`
+  `POST .../settlements/{settlementId}/execute`, and
+  `PATCH .../settlements/{settlementId}/payment`
 - `GET|POST /internal/v1/claims/{id}/recoveries`, `PATCH .../recoveries/{recoveryId}`
 - `GET|POST /internal/v1/claims/{id}/liens`, `PATCH .../liens/{lienId}`
 - `GET|POST /internal/v1/claims/{id}/tasks`, `PATCH .../tasks/{taskId}`
@@ -87,6 +88,17 @@ leaves the stored message and instant untouched, changing an allocation that is 
 `POSTED` is 409 `CONFLICT`, and an absent or out-of-tenant/claim allocation is 404.
 Recording the posting updates only the allocation row; it does not bump the claim version or
 write an outbox event.
+
+Settlements are exposed at `GET|POST /api/v1/claims/{claimId}/settlements` (also under
+`/internal/v1`), with `POST .../{settlementId}/approve` and `.../execute` for the lifecycle and
+`PATCH /api/v1/claims/{claimId}/settlements/{settlementId}/payment` for the Payment link. The
+payment command takes `{ "paymentId": "{uuid}" }` and stores the external Payment aggregate id plus
+the current instant as `paymentLinkedAt`; `{ "paymentId": null }` clears both fields. The settlement
+DTO exposes `paymentId` and `paymentLinkedAt`. Only an AUTHORIZED or EXECUTED settlement is linkable:
+a PROPOSED or REJECTED settlement is 409 `SETTLEMENT_NOT_LINKABLE`, an absent, out-of-tenant, or
+another-claim settlement is 404, and repeating the current link is a 200 no-op. A real link or unlink
+bumps both the claim and settlement versions and writes `direct.claim.settlement-payment-linked` in
+the same transaction.
 
 Claim assignment uses `PATCH /api/v1/claims/{claimId}/assignment` (or the internal alias)
 with `{ "assignedAdjuster": "adjuster@example.com", "assignedTeam": "CASUALTY",
@@ -142,6 +154,7 @@ The service publishes the names from `eia-contracts/asyncapi/event-catalog.yaml`
 | `POST .../coverage` | `direct.claim.coverage-assessed` |
 | `POST .../reserves` | `direct.claim.reserve-changed` |
 | `POST .../settlements/{id}/approve` | `direct.claim.settlement-authorized` |
+| `PATCH .../settlements/{id}/payment` | `direct.claim.settlement-payment-linked` |
 | `POST .../tasks` | `direct.claim.task-created` |
 | `PATCH .../tasks/{taskId}` to COMPLETE | `direct.claim.task-completed` |
 | `PATCH .../tasks/{taskId}` to CANCELLED or reopened | `direct.claim.task-updated` |
@@ -162,7 +175,9 @@ payloads add `assignedAdjuster`, `assignedTeam`, `assignedAt`, and `assignedBy`.
 and assignment writes bump the claim version, so their aggregate version is the post-write
 claim version plus one. Allocation payloads add `policyId`, `policyYear`, `layer`,
 `allocationPct`, `allocatedAmount`, `totalPct`, and `totalAmount`; allocation writes also
-bump the claim version.
+bump the claim version. Settlement payment payloads add `settlementId`, `settlementNumber`,
+`paymentId`, and `linkedAt`; an unlink omits the two null payment fields. Settlement payment
+writes bump the claim and settlement versions.
 
 Outbox rows are always written. HTTP dispatch and the Quartz job start only when
 `eia.outbox.enabled=true`; configure the subscriber endpoint with `EIA_OUTBOX_ENDPOINT`.

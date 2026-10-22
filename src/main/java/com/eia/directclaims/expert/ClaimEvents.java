@@ -48,6 +48,11 @@ import java.util.UUID;
  * like the task/note/assignment names it is not yet in the catalog and is
  * reported as a catalog follow-up.</p>
  *
+ * <p>{@code direct.claim.settlement-payment-linked} is new in the settlement
+ * payment slice and is likewise not yet in the catalog; it is reported as a
+ * follow-up. On an unlink the event still records the state change, with a null
+ * {@code paymentId} and {@code linkedAt}.</p>
+ *
  * <p>Claim rows start at version 0 for API compatibility, while the canonical
  * envelope requires {@code aggregateVersion >= 1}. The envelope version is
  * therefore the claim's row version after the change plus one, matching the
@@ -59,6 +64,7 @@ final class ClaimEvents {
     static final String COVERAGE_ASSESSED = "direct.claim.coverage-assessed";
     static final String RESERVE_CHANGED = "direct.claim.reserve-changed";
     static final String SETTLEMENT_AUTHORIZED = "direct.claim.settlement-authorized";
+    static final String SETTLEMENT_PAYMENT_LINKED = "direct.claim.settlement-payment-linked";
     static final String CLOSED = "direct.claim.closed";
     static final String ASSIGNED = "direct.claim.assigned";
     static final String TASK_CREATED = "direct.claim.task-created";
@@ -180,6 +186,22 @@ final class ClaimEvents {
         data.put("authorizedBy", settlement.authorizedBy());
         data.put("authorizedAt", settlement.authorizedAt());
         return envelope(claim, SETTLEMENT_AUTHORIZED, claimVersion + 1L, now, data);
+    }
+
+    /**
+     * Settlement payment link or unlink. The settlement carries the payment id
+     * and linked instant after the write; both are null on an unlink. The claim
+     * version is bumped as part of the write so the event stays monotonic per
+     * claim.
+     */
+    static EventEnvelope settlementPaymentLinked(Claim claim, Settlement settlement,
+                                                 int claimVersion, Instant now) {
+        Map<String, Object> data = identity(claim, claimVersion);
+        data.put("settlementId", settlement.id());
+        data.put("settlementNumber", settlement.settlementNumber());
+        data.put("paymentId", settlement.paymentId());
+        data.put("linkedAt", settlement.paymentLinkedAt());
+        return envelope(claim, SETTLEMENT_PAYMENT_LINKED, claimVersion + 1L, now, data);
     }
 
     /**

@@ -97,11 +97,16 @@ CREATE TABLE IF NOT EXISTS claim_settlement (
     authorized_by UUID,
     authorized_at TIMESTAMP WITH TIME ZONE,
     executed_at TIMESTAMP WITH TIME ZONE,
+    payment_id UUID,
+    payment_linked_at TIMESTAMP WITH TIME ZONE,
     version INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
     CONSTRAINT uq_settlement_number UNIQUE (tenant_id, settlement_number)
 );
+
+ALTER TABLE claim_settlement ADD COLUMN IF NOT EXISTS payment_id UUID;
+ALTER TABLE claim_settlement ADD COLUMN IF NOT EXISTS payment_linked_at TIMESTAMP WITH TIME ZONE;
 
 CREATE TABLE IF NOT EXISTS claim_lien (
     id UUID PRIMARY KEY,

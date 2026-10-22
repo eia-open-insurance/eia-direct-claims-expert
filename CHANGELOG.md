@@ -107,6 +107,21 @@ The format is based on Keep a Changelog and the project uses Semantic Versioning
   - Service, controller, and H2 integration tests cover create with and without a limit,
     posted/failed transitions, retry after failure, idempotency, tenant/claim isolation, and
     the allocation DTO.
+- Settlement payment linkage:
+  - Additive, idempotent `claim_settlement` columns `payment_id UUID` and
+    `payment_linked_at TIMESTAMPTZ` in the PostgreSQL and H2 schemas.
+  - `PATCH /api/v1/claims/{claimId}/settlements/{settlementId}/payment` (also under
+    `/internal/v1`) takes `{paymentId}`. Only an AUTHORIZED or EXECUTED settlement is linkable;
+    a PROPOSED or REJECTED settlement is 409 `SETTLEMENT_NOT_LINKABLE`, and an absent,
+    out-of-tenant, or another-claim settlement is 404.
+  - A non-null `paymentId` stores the external Payment aggregate id and stamps
+    `paymentLinkedAt`; null clears both. Repeating the current link is a 200 no-op. A real
+    link or unlink bumps the claim and settlement versions.
+  - The settlement DTO exposes `paymentId` and `paymentLinkedAt`.
+  - `direct.claim.settlement-payment-linked` is written to the outbox in the same transaction
+    with `claimId`, `settlementId`, `settlementNumber`, `paymentId`, and `linkedAt`; an unlink
+    omits the two null payment fields. Service, controller, and H2 integration tests cover
+    link/unlink, invalid status, tenant isolation, the DTO, event payload, and idempotency.
 - Claim list claimant filter: `GET /internal/v1/claims` accepts an optional
   `claimantPartyId` UUID alongside `status`. The tenant and DIRECT book scope stay
   mandatory, the two optional filters combine, and results remain newest first by

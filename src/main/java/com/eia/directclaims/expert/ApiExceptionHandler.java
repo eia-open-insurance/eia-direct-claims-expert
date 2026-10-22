@@ -81,6 +81,16 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * Only an AUTHORIZED or EXECUTED settlement may link a payment. The stable
+     * code is part of the settlement payment contract.
+     */
+    @ExceptionHandler(SettlementNotLinkableException.class)
+    public ResponseEntity<ApiError> settlementNotLinkable(SettlementNotLinkableException ex,
+                                                          HttpServletRequest request) {
+        return error(HttpStatus.CONFLICT, "SETTLEMENT_NOT_LINKABLE", ex.getMessage(), request, null);
+    }
+
+    /**
      * An allocation must name the claim's own policy. The stable code is part
      * of the allocation contract.
      */

@@ -16,7 +16,7 @@ public class SettlementRepository {
     private static final String COLUMNS = """
             id, tenant_id, claim_id, settlement_number, amount, currency, structure, release_scope,
             approval_authority, payment_instructions, release_document_id, status, authorized_by,
-            authorized_at, executed_at, version, created_at, updated_at
+            authorized_at, executed_at, payment_id, payment_linked_at, version, created_at, updated_at
             """;
 
     private static final RowMapper<Settlement> MAPPER = (rs, rowNum) -> new Settlement(
@@ -35,6 +35,9 @@ public class SettlementRepository {
             rs.getObject("authorized_by", UUID.class),
             rs.getTimestamp("authorized_at") == null ? null : rs.getTimestamp("authorized_at").toInstant(),
             rs.getTimestamp("executed_at") == null ? null : rs.getTimestamp("executed_at").toInstant(),
+            rs.getObject("payment_id", UUID.class),
+            rs.getTimestamp("payment_linked_at") == null
+                    ? null : rs.getTimestamp("payment_linked_at").toInstant(),
             rs.getInt("version"),
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant()
@@ -129,6 +132,35 @@ public class SettlementRepository {
                     + " or was modified concurrently");
         }
         return findById(tenantId, claimId, settlementId).orElseThrow(() -> new ClaimNotFoundException(claimId));
+    }
+
+    /**
+     * Sets or clears the external Payment link. A non-null {@code paymentId}
+     * stamps {@code paymentLinkedAt} with {@code linkedAt}; a null payment id
+     * clears both columns. The version predicate and the status predicate make
+     * the update safe against a concurrent settlement change.
+     */
+    public Settlement updatePayment(UUID tenantId,
+                                    UUID claimId,
+                                    UUID settlementId,
+                                    UUID paymentId,
+                                    Instant linkedAt,
+                                    int expectedVersion,
+                                    Instant now) {
+        int changed = jdbc.update("""
+                UPDATE claim_settlement
+                   SET payment_id = ?, payment_linked_at = ?, version = version + 1, updated_at = ?
+                 WHERE tenant_id = ? AND claim_id = ? AND id = ? AND version = ?
+                   AND status IN ('AUTHORIZED', 'EXECUTED')
+                """, paymentId, linkedAt == null ? null : Timestamp.from(linkedAt), Timestamp.from(now),
+                tenantId, claimId, settlementId, expectedVersion);
+        if (changed == 0) {
+            throw new ClaimConflictException("Settlement " + settlementId
+                    + " is not AUTHORIZED or EXECUTED at version " + expectedVersion
+                    + " or was modified concurrently");
+        }
+        return findById(tenantId, claimId, settlementId)
+                .orElseThrow(() -> new ClaimNotFoundException(claimId));
     }
 
     /** Amount already committed by authorized or executed settlements. */
